@@ -1,6 +1,6 @@
 const { useState, useRef, useEffect } = React;
 
-export default function PdfSigner() {
+function PdfSigner() {
   const [clickPos, setClickPos] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [signatureData, setSignatureData] = useState(null);
@@ -228,3 +228,5 @@ const styles = {
   btnCancel: { backgroundColor: '#FEE2E2', color: '#DC2626' },
   btnApply: { backgroundColor: '#2563EB', color: '#FFFFFF' },
 };
+
+window.PdfSigner = PdfSigner;
