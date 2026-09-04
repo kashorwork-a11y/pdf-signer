@@ -70,6 +70,7 @@
     .btn-success { background-color: #28a745; }
     .btn-success:hover { background-color: #218838; }
     .btn-active { background-color: #dc3545; }
+    .btn-sm { padding: 4px 10px; font-size: 11px; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .file-input { display: none; }
@@ -97,6 +98,18 @@
       border-radius: 50%;
       cursor: pointer;
       background: none;
+    }
+
+    .sig-size-controls {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      background: #f0f4f8;
+      padding: 4px 10px;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: bold;
+      color: #333;
     }
 
     /* -------------------------------------------------------------
@@ -156,9 +169,7 @@
       justify-content: center;
     }
 
-    .delete-btn:hover {
-      background: #bd2130;
-    }
+    .delete-btn:hover { background: #bd2130; }
 
     /* -------------------------------------------------------------
        WORKSPACE & PDF CONTAINER
@@ -206,12 +217,37 @@
       touch-action: none;
     }
 
+    .pdf-signature.selected {
+      border: 2px solid #28a745;
+      box-shadow: 0 0 8px rgba(40, 167, 69, 0.6);
+    }
+
     .pdf-signature img {
       display: block;
       pointer-events: none;
+      width: 100%;
+      height: auto;
     }
 
     .pdf-signature:active { cursor: grabbing; }
+
+    /* RESIZE HANDLE */
+    .resize-handle {
+      position: absolute;
+      right: -6px;
+      bottom: -6px;
+      width: 12px;
+      height: 12px;
+      background: #007bff;
+      border: 2px solid white;
+      border-radius: 50%;
+      cursor: se-resize;
+      display: none;
+    }
+
+    .pdf-signature.selected .resize-handle {
+      display: block;
+    }
 
     .placeholder-text {
       position: absolute;
@@ -236,7 +272,7 @@
       <!-- Mode Toggle -->
       <button class="btn btn-secondary" id="modeBtn" onclick="toggleMode()">Mode: Navigation</button>
       
-      <!-- Signature Ink Color Picker (Default Ink Blue #000080) -->
+      <!-- Signature Ink Color Picker -->
       <div class="color-picker-wrapper" id="colorPickerContainer" style="display: none;">
         <span>Color:</span>
         <input type="color" id="sigColor" class="color-picker" value="#000080" onchange="updateInkColor(this.value)">
@@ -244,6 +280,15 @@
 
       <!-- Save Freehand Signature -->
       <button class="btn" id="saveSigBtn" onclick="saveCurrentDrawingToLibrary()" style="display: none;">Save Signature</button>
+
+      <!-- Dynamic Signature Resizing Controls -->
+      <div class="sig-size-controls" id="sigSizeControls">
+        <span>Sig Size:</span>
+        <button class="btn btn-secondary btn-sm" onclick="scaleSelectedSignature(-0.1)">-</button>
+        <input type="range" id="sigSizeSlider" min="30" max="300" value="150" style="width: 70px;" oninput="updateSignatureWidth(this.value)">
+        <button class="btn btn-secondary btn-sm" onclick="scaleSelectedSignature(0.1)">+</button>
+        <button class="btn btn-secondary btn-sm" onclick="resetSelectedSigSize()">Reset</button>
+      </div>
 
       <!-- History Controls -->
       <button class="btn btn-secondary" id="undoBtn" onclick="undo()" disabled>Undo</button>
@@ -296,15 +341,18 @@
     let pageNum = 1;
     let currentScale = 1.0;
     let isSignMode = false;
-    let inkColor = '#000080'; // Ink Blue Default
+    let inkColor = '#000080';
 
     // Automatic Per-Page Storage
     let pageSignatures = {};
     let pageDrawings = {};
 
-    // Dragging State
+    // Selection & Resizing State
+    let selectedSignature = null;
     let activeSignature = null;
     let dragOffset = { x: 0, y: 0 };
+    let isResizing = false;
+    let resizeStart = { x: 0, width: 0 };
 
     // Drawing State
     let isDrawing = false;
@@ -319,6 +367,13 @@
     const pdfCtx = pdfCanvas.getContext('2d');
     const drawCanvas = document.getElementById('drawCanvas');
     const drawCtx = drawCanvas.getContext('2d');
+
+    // Deselect signature when clicking empty space
+    document.addEventListener('pointerdown', (e) => {
+      if (!e.target.closest('.pdf-signature') && !e.target.closest('#sigSizeControls')) {
+        deselectSignature();
+      }
+    });
 
     // --- 1. PDF LOADING & PAGE MANAGEMENT ---
     function loadPdfFile(event) {
@@ -353,8 +408,7 @@
         signatures.push({
           left: parseFloat(sig.style.left) || 0,
           top: parseFloat(sig.style.top) || 0,
-          width: img ? img.width : 150,
-          height: img ? img.height : 75,
+          width: parseFloat(sig.style.width) || (img ? img.width : 150),
           src: img ? img.src : ''
         });
       });
@@ -363,21 +417,14 @@
     }
 
     function restorePageData(targetPage) {
+      deselectSignature();
       document.querySelectorAll('.pdf-signature').forEach(el => el.remove());
 
       if (pageSignatures[targetPage]) {
         pageSignatures[targetPage].forEach(sigData => {
-          const sigWrapper = document.createElement('div');
-          sigWrapper.className = 'pdf-signature';
+          const sigWrapper = createSignatureWrapper(sigData.src, sigData.width);
           sigWrapper.style.left = `${sigData.left}px`;
           sigWrapper.style.top = `${sigData.top}px`;
-
-          const img = document.createElement('img');
-          img.src = sigData.src;
-          img.style.width = `${sigData.width}px`;
-
-          sigWrapper.appendChild(img);
-          makeDraggable(sigWrapper);
           pdfPage.appendChild(sigWrapper);
         });
       }
@@ -434,7 +481,7 @@
       pdfPage.style.transform = `scale(1.0)`;
     }
 
-    // --- 3. NAVIGATION VS. SIGN MODE TOGGLE ---
+    // --- 3. MODE TOGGLE & CONTROLS ---
     function toggleMode() {
       isSignMode = !isSignMode;
       const modeBtn = document.getElementById('modeBtn');
@@ -448,6 +495,7 @@
         saveBtn.style.display = 'inline-block';
         colorContainer.style.display = 'flex';
         drawCanvas.style.pointerEvents = 'auto';
+        deselectSignature();
       } else {
         modeBtn.textContent = 'Mode: Navigation';
         modeBtn.classList.remove('btn-active');
@@ -522,15 +570,73 @@
     drawCanvas.addEventListener('touchmove', draw, { passive: false });
     drawCanvas.addEventListener('touchend', stopDrawing);
 
-    // --- 5. INSTANT DRAG MOVEMENT ---
-    function makeDraggable(element) {
-      element.addEventListener('mousedown', startDrag);
-      element.addEventListener('touchstart', startDrag, { passive: false });
+    // --- 5. SIGNATURE CREATION, DRAGGING & SIZING ---
+    function createSignatureWrapper(dataUrl, initialWidth = 150) {
+      const sigWrapper = document.createElement('div');
+      sigWrapper.className = 'pdf-signature';
+      sigWrapper.style.width = `${initialWidth}px`;
+
+      const img = document.createElement('img');
+      img.src = dataUrl;
+
+      const handle = document.createElement('div');
+      handle.className = 'resize-handle';
+
+      sigWrapper.appendChild(img);
+      sigWrapper.appendChild(handle);
+
+      sigWrapper.addEventListener('mousedown', (e) => onSignaturePointerDown(e, sigWrapper));
+      sigWrapper.addEventListener('touchstart', (e) => onSignaturePointerDown(e, sigWrapper), { passive: false });
+
+      handle.addEventListener('mousedown', (e) => startResizing(e, sigWrapper));
+      handle.addEventListener('touchstart', (e) => startResizing(e, sigWrapper), { passive: false });
+
+      return sigWrapper;
     }
 
-    function startDrag(e) {
-      activeSignature = e.currentTarget;
+    function selectSignature(el) {
+      deselectSignature();
+      selectedSignature = el;
+      selectedSignature.classList.add('selected');
+      
+      const currentWidth = parseFloat(selectedSignature.style.width) || 150;
+      const slider = document.getElementById('sigSizeSlider');
+      slider.value = currentWidth;
 
+      document.getElementById('sigSizeControls').style.display = 'flex';
+    }
+
+    function deselectSignature() {
+      if (selectedSignature) {
+        selectedSignature.classList.remove('selected');
+        selectedSignature = null;
+      }
+      document.getElementById('sigSizeControls').style.display = 'none';
+    }
+
+    function updateSignatureWidth(newWidth) {
+      if (!selectedSignature) return;
+      const clampedWidth = Math.max(30, Math.min(400, newWidth));
+      selectedSignature.style.width = `${clampedWidth}px`;
+      document.getElementById('sigSizeSlider').value = clampedWidth;
+      saveState();
+    }
+
+    function scaleSelectedSignature(factor) {
+      if (!selectedSignature) return;
+      const currentWidth = parseFloat(selectedSignature.style.width) || 150;
+      updateSignatureWidth(currentWidth * (1 + factor));
+    }
+
+    function resetSelectedSigSize() {
+      updateSignatureWidth(150);
+    }
+
+    function onSignaturePointerDown(e, wrapper) {
+      if (e.target.classList.contains('resize-handle')) return;
+      selectSignature(wrapper);
+
+      activeSignature = wrapper;
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
@@ -552,7 +658,6 @@
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
       const pdfRect = pdfPage.getBoundingClientRect();
-
       let newX = (clientX - pdfRect.left) / currentScale - dragOffset.x;
       let newY = (clientY - pdfRect.top) / currentScale - dragOffset.y;
 
@@ -569,6 +674,44 @@
       document.removeEventListener('mouseup', stopDrag);
       document.removeEventListener('touchmove', onDrag);
       document.removeEventListener('touchend', stopDrag);
+    }
+
+    function startResizing(e, wrapper) {
+      e.stopPropagation();
+      isResizing = true;
+      selectSignature(wrapper);
+
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      resizeStart.x = clientX;
+      resizeStart.width = parseFloat(wrapper.style.width) || 150;
+
+      document.addEventListener('mousemove', onResize);
+      document.addEventListener('mouseup', stopResize);
+      document.addEventListener('touchmove', onResize, { passive: false });
+      document.addEventListener('touchend', stopResize);
+    }
+
+    function onResize(e) {
+      if (!isResizing || !selectedSignature) return;
+      e.preventDefault();
+
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const deltaX = (clientX - resizeStart.x) / currentScale;
+      const newWidth = Math.max(30, resizeStart.width + deltaX);
+
+      selectedSignature.style.width = `${newWidth}px`;
+      document.getElementById('sigSizeSlider').value = newWidth;
+    }
+
+    function stopResize() {
+      if (isResizing) {
+        isResizing = false;
+        saveState();
+      }
+      document.removeEventListener('mousemove', onResize);
+      document.removeEventListener('mouseup', stopResize);
+      document.removeEventListener('touchmove', onResize);
+      document.removeEventListener('touchend', stopResize);
     }
 
     // --- 6. SIGNATURE LIBRARY ---
@@ -617,19 +760,12 @@
     }
 
     function insertSignatureFromLibrary(dataUrl) {
-      const sigWrapper = document.createElement('div');
-      sigWrapper.className = 'pdf-signature';
+      const sigWrapper = createSignatureWrapper(dataUrl, 150);
       sigWrapper.style.left = '50px';
       sigWrapper.style.top = '50px';
 
-      const img = document.createElement('img');
-      img.src = dataUrl;
-      img.style.width = '150px';
-
-      sigWrapper.appendChild(img);
-      makeDraggable(sigWrapper);
       pdfPage.appendChild(sigWrapper);
-
+      selectSignature(sigWrapper);
       saveState();
     }
 
@@ -680,7 +816,6 @@
     async function exportSignedPdf() {
       if (!originalPdfBytes) return;
 
-      // Save latest state of current active page
       saveCurrentPageData();
 
       const { PDFDocument } = PDFLib;
@@ -692,7 +827,7 @@
         const pdfLibWidth = page.getWidth();
         const pdfLibHeight = page.getHeight();
 
-        // 1. Embed Freehand Drawing Layer (if exists)
+        // 1. Embed Freehand Drawing Layer
         if (pageDrawings[i]) {
           const drawImg = await pdfDocExport.embedPng(pageDrawings[i]);
           page.drawImage(drawImg, {
@@ -703,24 +838,26 @@
           });
         }
 
-        // 2. Embed Positioned Signatures (if exist)
+        // 2. Embed Positioned & Scaled Signatures
         if (pageSignatures[i]) {
           const screenCanvasWidth = drawCanvas.width;
           const screenCanvasHeight = drawCanvas.height;
 
-          // Conversion scale factor between viewer canvas and PDF points
           const scaleX = pdfLibWidth / screenCanvasWidth;
           const scaleY = pdfLibHeight / screenCanvasHeight;
 
           for (const sig of pageSignatures[i]) {
             if (sig.src) {
               const sigImg = await pdfDocExport.embedPng(sig.src);
+              const imgDims = sigImg.scale(1);
 
               const pdfX = sig.left * scaleX;
               const pdfWidth = sig.width * scaleX;
-              const pdfHeight = sig.height * scaleY;
               
-              // PDF.js coordinates use Top-Left as origin; PDF-Lib uses Bottom-Left
+              // Maintain aspect ratio during export
+              const aspectRatio = imgDims.height / imgDims.width;
+              const pdfHeight = pdfWidth * aspectRatio;
+
               const pdfY = pdfLibHeight - (sig.top * scaleY) - pdfHeight;
 
               page.drawImage(sigImg, {
@@ -734,7 +871,6 @@
         }
       }
 
-      // Generate PDF file and trigger direct download
       const pdfBytes = await pdfDocExport.save();
       const blob = new Blob([pdfBytes], { type: 'application/pdf' });
       const link = document.createElement('a');
