@@ -13,7 +13,8 @@
   <body>
     <div id="root"></div>
 
-    <!-- Added data-plugins to allow import/export statements in browser Babel -->
-    <script type="text/babel" data-plugins="transform-modules-umd" src="./src/index.js"></script>
+    <!-- Load PdfSigner first, then index.js -->
+    <script type="text/babel" src="./src/PdfSigner.js"></script>
+    <script type="text/babel" src="./src/index.js"></script>
   </body>
 </html>
