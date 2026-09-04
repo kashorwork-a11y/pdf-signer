@@ -8,9 +8,6 @@ function PdfSigner() {
   const [currentPage, setCurrentPage] = useState(1);
   const [zoom, setZoom] = useState(1.0);
 
-  // Modes: 'navigate' or 'sign'
-  const [mode, setMode] = useState('navigate');
-
   // Signature Color State (Default wet-ink blue #002B7F)
   const [penColor, setPenColor] = useState('#002B7F');
 
@@ -24,7 +21,7 @@ function PdfSigner() {
 
   // Modal and Drawing state
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState('saved'); // 'saved' or 'draw'
+  const [activeTab, setActiveTab] = useState('draw'); // Default to 'draw'
   const [pendingPos, setPendingPos] = useState({ x: 0, y: 0 });
   const [isDrawing, setIsDrawing] = useState(false);
   const canvasRef = useRef(null);
@@ -60,7 +57,7 @@ function PdfSigner() {
     }
   };
 
-  // 1. Upload PDF (Keeps savedSignatures intact!)
+  // Upload PDF (Keeps savedSignatures intact!)
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file && file.type === 'application/pdf') {
@@ -104,13 +101,13 @@ function PdfSigner() {
 
   // Handle clicking on page to add signature
   const handlePageClick = (e) => {
-    if (mode !== 'sign' || activeActionRef.current) return;
+    if (activeActionRef.current) return;
     const rect = pdfCanvasRef.current.getBoundingClientRect();
     const x = (e.clientX - rect.left) / zoom;
     const y = (e.clientY - rect.top) / zoom;
 
     setPendingPos({ x, y });
-    setActiveTab(savedSignatures.length > 0 ? 'saved' : 'draw');
+    setActiveTab('draw'); // Always default to 'draw' when opening signature modal
     setIsModalOpen(true);
   };
 
@@ -186,7 +183,6 @@ function PdfSigner() {
     if (!canvas) return;
     const dataUrl = canvas.toDataURL('image/png');
 
-    // Save to session library if not already present
     if (!savedSignatures.includes(dataUrl)) {
       setSavedSignatures((prev) => [...prev, dataUrl]);
     }
@@ -307,22 +303,6 @@ function PdfSigner() {
 
         {pdfDoc && (
           <>
-            {/* Mode Switcher */}
-            <div style={styles.group}>
-              <button
-                style={{ ...styles.btn, backgroundColor: mode === 'navigate' ? '#2563EB' : '#E2E8F0', color: mode === 'navigate' ? '#FFF' : '#334155' }}
-                onClick={() => setMode('navigate')}
-              >
-                🖐️ Navigate
-              </button>
-              <button
-                style={{ ...styles.btn, backgroundColor: mode === 'sign' ? '#2563EB' : '#E2E8F0', color: mode === 'sign' ? '#FFF' : '#334155' }}
-                onClick={() => setMode('sign')}
-              >
-                ✍️ Sign
-              </button>
-            </div>
-
             {/* Page Navigation */}
             <div style={styles.group}>
               <button style={styles.btn} disabled={currentPage <= 1} onClick={() => setCurrentPage(currentPage - 1)}>
@@ -336,17 +316,16 @@ function PdfSigner() {
               </button>
             </div>
 
-            {/* Zoom Controls */}
+            {/* Zoom Controls (Icons only) */}
             <div style={styles.group}>
-              <button style={styles.btn} onClick={() => setZoom((z) => Math.max(0.5, z - 0.2))}>🔍 -</button>
-              <span style={styles.pageIndicator}>{Math.round(zoom * 100)}%</span>
-              <button style={styles.btn} onClick={() => setZoom((z) => Math.min(2.5, z + 0.2))}>🔍 +</button>
+              <button style={styles.btn} title="Zoom Out" onClick={() => setZoom((z) => Math.max(0.5, z - 0.2))}>🔍 -</button>
+              <button style={styles.btn} title="Zoom In" onClick={() => setZoom((z) => Math.min(2.5, z + 0.2))}>🔍 +</button>
             </div>
 
-            {/* History Controls */}
+            {/* History Controls (Icons only) */}
             <div style={styles.group}>
-              <button style={styles.btn} disabled={historyStep === 0} onClick={undo}>↩ Undo</button>
-              <button style={styles.btn} disabled={historyStep === history.length - 1} onClick={redo}>↪ Redo</button>
+              <button style={styles.btn} title="Undo" disabled={historyStep === 0} onClick={undo}>↩</button>
+              <button style={styles.btn} title="Redo" disabled={historyStep === history.length - 1} onClick={redo}>↪</button>
             </div>
 
             {/* Export Button */}
@@ -369,7 +348,7 @@ function PdfSigner() {
             style={{
               position: 'relative',
               display: 'inline-block',
-              cursor: mode === 'sign' ? 'crosshair' : 'default',
+              cursor: 'crosshair',
             }}
             onClick={handlePageClick}
           >
@@ -389,17 +368,15 @@ function PdfSigner() {
                     height: `${sig.height * zoom}px`,
                     border: selectedSigId === sig.id ? '1.5px dashed #2563EB' : '1px dashed transparent',
                     backgroundColor: 'rgba(37, 99, 235, 0.05)',
-                    cursor: mode === 'sign' ? 'grab' : 'default',
+                    cursor: 'grab',
                   }}
-                  onMouseDown={(e) => mode === 'sign' && handleMouseDown(e, sig, 'move')}
+                  onMouseDown={(e) => handleMouseDown(e, sig, 'move')}
                 >
                   <img src={sig.dataUrl} style={{ width: '100%', height: '100%', pointerEvents: 'none' }} alt="signature" />
-                  {mode === 'sign' && (
-                    <div
-                      style={styles.resizeHandle}
-                      onMouseDown={(e) => handleMouseDown(e, sig, 'resize')}
-                    />
-                  )}
+                  <div
+                    style={styles.resizeHandle}
+                    onMouseDown={(e) => handleMouseDown(e, sig, 'resize')}
+                  />
                 </div>
               ))}
           </div>
@@ -415,16 +392,6 @@ function PdfSigner() {
               <button
                 style={{
                   ...styles.tabBtn,
-                  borderBottom: activeTab === 'saved' ? '2px solid #2563EB' : '2px solid transparent',
-                  color: activeTab === 'saved' ? '#2563EB' : '#64748B',
-                }}
-                onClick={() => setActiveTab('saved')}
-              >
-                Saved Signatures ({savedSignatures.length})
-              </button>
-              <button
-                style={{
-                  ...styles.tabBtn,
                   borderBottom: activeTab === 'draw' ? '2px solid #2563EB' : '2px solid transparent',
                   color: activeTab === 'draw' ? '#2563EB' : '#64748B',
                 }}
@@ -432,7 +399,62 @@ function PdfSigner() {
               >
                 Draw New
               </button>
+              <button
+                style={{
+                  ...styles.tabBtn,
+                  borderBottom: activeTab === 'saved' ? '2px solid #2563EB' : '2px solid transparent',
+                  color: activeTab === 'saved' ? '#2563EB' : '#64748B',
+                }}
+                onClick={() => setActiveTab('saved')}
+              >
+                Saved Signatures ({savedSignatures.length})
+              </button>
             </div>
+
+            {/* Draw New Signature Tab (Default View) */}
+            {activeTab === 'draw' && (
+              <div>
+                <div style={styles.colorPickerContainer}>
+                  <span style={{ fontSize: '14px', fontWeight: 600, color: '#475569' }}>Ink Color:</span>
+                  {colorOptions.map((c) => (
+                    <button
+                      key={c.value}
+                      onClick={() => setPenColor(c.value)}
+                      style={{
+                        ...styles.colorCircle,
+                        backgroundColor: c.value,
+                        outline: penColor === c.value ? '2px solid #2563EB' : 'none',
+                        outlineOffset: '2px',
+                      }}
+                      title={c.label}
+                    />
+                  ))}
+                </div>
+
+                <canvas
+                  ref={canvasRef}
+                  style={styles.drawCanvas}
+                  onMouseDown={startDrawing}
+                  onMouseMove={draw}
+                  onMouseUp={stopDrawing}
+                  onTouchStart={startDrawing}
+                  onTouchMove={draw}
+                  onTouchEnd={stopDrawing}
+                />
+
+                <div style={styles.modalActions}>
+                  <button style={{ ...styles.btn, backgroundColor: '#E2E8F0' }} onClick={clearCanvas}>
+                    Clear
+                  </button>
+                  <button style={{ ...styles.btn, backgroundColor: '#FEE2E2', color: '#DC2626' }} onClick={() => setIsModalOpen(false)}>
+                    Cancel
+                  </button>
+                  <button style={{ ...styles.btn, backgroundColor: '#2563EB', color: '#FFF' }} onClick={handleApplyNewSignature}>
+                    Save & Place Signature
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Saved Signatures Tab */}
             {activeTab === 'saved' && (
@@ -475,51 +497,6 @@ function PdfSigner() {
                     onClick={handleApplySavedSignature}
                   >
                     Place Signature
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Draw New Signature Tab */}
-            {activeTab === 'draw' && (
-              <div>
-                <div style={styles.colorPickerContainer}>
-                  <span style={{ fontSize: '14px', fontWeight: 600, color: '#475569' }}>Ink Color:</span>
-                  {colorOptions.map((c) => (
-                    <button
-                      key={c.value}
-                      onClick={() => setPenColor(c.value)}
-                      style={{
-                        ...styles.colorCircle,
-                        backgroundColor: c.value,
-                        outline: penColor === c.value ? '2px solid #2563EB' : 'none',
-                        outlineOffset: '2px',
-                      }}
-                      title={c.label}
-                    />
-                  ))}
-                </div>
-
-                <canvas
-                  ref={canvasRef}
-                  style={styles.drawCanvas}
-                  onMouseDown={startDrawing}
-                  onMouseMove={draw}
-                  onMouseUp={stopDrawing}
-                  onTouchStart={startDrawing}
-                  onTouchMove={draw}
-                  onTouchEnd={stopDrawing}
-                />
-
-                <div style={styles.modalActions}>
-                  <button style={{ ...styles.btn, backgroundColor: '#E2E8F0' }} onClick={clearCanvas}>
-                    Clear
-                  </button>
-                  <button style={{ ...styles.btn, backgroundColor: '#FEE2E2', color: '#DC2626' }} onClick={() => setIsModalOpen(false)}>
-                    Cancel
-                  </button>
-                  <button style={{ ...styles.btn, backgroundColor: '#2563EB', color: '#FFF' }} onClick={handleApplyNewSignature}>
-                    Save & Place Signature
                   </button>
                 </div>
               </div>
