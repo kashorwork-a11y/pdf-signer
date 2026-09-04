@@ -1,4 +1,3 @@
-import PdfSigner from './PdfSigner.js';
-
+const App = window.PdfSigner;
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(PdfSigner));
+root.render(React.createElement(App));
