@@ -1,10 +1,4 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import PdfSigner from './src/PdfSigner';
+import PdfSigner from './PdfSigner.js';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <PdfSigner />
-  </React.StrictMode>
-);
+root.render(React.createElement(PdfSigner));
