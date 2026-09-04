@@ -6,7 +6,6 @@
   <title>S Pen PDF Multi-Page Signer</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-  <!-- Handwritten cursive font for signature generator -->
   <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -87,11 +86,13 @@
       justify-content: center;
       align-items: flex-start;
       padding: 20px;
+      touch-action: none;
     }
     .page-wrapper {
       position: relative;
       box-shadow: 0 4px 12px rgba(0,0,0,0.5);
       background-color: white;
+      transform-origin: 0 0;
     }
     canvas {
       display: block;
@@ -119,7 +120,7 @@
       text-align: center;
       background: rgba(30, 30, 30, 0.9);
     }
-    /* Modal for Handwritten Name Signature */
+    /* Modals & Library */
     .modal {
       display: none;
       position: fixed;
@@ -146,6 +147,20 @@
       color: #fff;
       font-size: 16px;
     }
+    .sig-library-grid {
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      padding: 8px 0;
+    }
+    .sig-item {
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 6px;
+      background: #fff;
+      cursor: pointer;
+      max-height: 60px;
+    }
   </style>
 </head>
 <body>
@@ -165,17 +180,19 @@
       <button id="zoom-reset" disabled>↺</button>
     </div>
 
-    <!-- Page Navigation -->
+    <!-- Navigation -->
     <div class="btn-group">
       <button id="prev-page" disabled>❮</button>
       <span class="status-text">Page <span id="page-num">0</span> / <span id="page-count">0</span></span>
       <button id="next-page" disabled>❯</button>
     </div>
 
-    <!-- Ink Controls & Signature Generator -->
+    <!-- Ink, Auto-Sig & Library Controls -->
     <div class="btn-group">
       <input type="color" id="pen-color" class="color-picker" value="#000d66" title="Wet Ink Color">
       <button id="gen-sig-btn" disabled>✍️ Auto Signature</button>
+      <button id="save-sig-lib" disabled>💾 Save to Library</button>
+      <button id="open-lib-btn">📦 Saved Sigs (<span id="lib-count">0</span>)</button>
       <button id="clear-canvas" disabled>🧹 Clear</button>
     </div>
   </header>
@@ -183,7 +200,7 @@
   <div id="viewer-container">
     <div id="drop-zone">
       <h3>Tap "Open PDF" to begin</h3>
-      <p>Seamless auto-save across pages with ultra-smooth wet ink.</p>
+      <p>Use 2 fingers to zoom/pan or resize signature. Single finger/S Pen to sign.</p>
     </div>
     <div class="page-wrapper" id="page-wrapper" style="display:none;">
       <canvas id="pdf-render"></canvas>
@@ -203,28 +220,51 @@
     </div>
   </div>
 
+  <!-- Saved Signatures Library Modal -->
+  <div class="modal" id="lib-modal">
+    <div class="modal-content" style="width: 360px;">
+      <h3>Session Signature Library</h3>
+      <div id="library-container" class="sig-library-grid">
+        <p style="color:#aaa; font-size: 13px;">No saved signatures in this session yet.</p>
+      </div>
+      <div class="btn-group" style="justify-content: flex-end;">
+        <button id="close-lib-modal">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
 
     let pdfDoc = null;
     let pageNum = 1;
-    let baseScale = 2.0; // Render at 2x resolution for retina/crisp wet ink rendering
+    let baseScale = 2.0;
     let currentZoom = 1.0;
     let rawPdfBytes = null;
 
-    // High-res vector canvas data for each page
-    const pageSignatures = {};
+    // Viewport Panning offset
+    let panX = 0, panY = 0;
 
+    // Signatures stored per page
+    const pageSignatures = {};
+    // Session Signature Library
+    const signatureLibrary = [];
+
+    const pageWrapper = document.getElementById('page-wrapper');
     const pdfCanvas = document.getElementById('pdf-render');
     const pdfCtx = pdfCanvas.getContext('2d');
     const drawCanvas = document.getElementById('draw-canvas');
     const drawCtx = drawCanvas.getContext('2d');
     const fileInput = document.getElementById('pdf-input');
     const openBtn = document.getElementById('open-btn');
+    const viewerContainer = document.getElementById('viewer-container');
 
     let isDrawing = false;
     let points = [];
     let penColor = document.getElementById('pen-color').value;
+
+    // Active placed signature box state for two-finger resizing
+    let activeSigBox = null; 
 
     document.getElementById('pen-color').addEventListener('change', (e) => {
       penColor = e.target.value;
@@ -237,7 +277,7 @@
       if (!file) return;
 
       document.getElementById('drop-zone').style.display = 'none';
-      document.getElementById('page-wrapper').style.display = 'block';
+      pageWrapper.style.display = 'block';
 
       rawPdfBytes = await file.arrayBuffer();
       const loadingTask = pdfjsLib.getDocument({ data: rawPdfBytes });
@@ -247,12 +287,14 @@
       document.getElementById('save-btn').disabled = false;
       document.getElementById('clear-canvas').disabled = false;
       document.getElementById('gen-sig-btn').disabled = false;
+      document.getElementById('save-sig-lib').disabled = false;
       document.getElementById('zoom-in').disabled = false;
       document.getElementById('zoom-out').disabled = false;
       document.getElementById('zoom-reset').disabled = false;
       
       pageNum = 1;
       currentZoom = 1.0;
+      panX = 0; panY = 0;
       renderPage(pageNum);
     });
 
@@ -261,7 +303,6 @@
       const effectiveScale = baseScale * currentZoom;
       const viewport = page.getViewport({ scale: effectiveScale });
 
-      // Match physical screen dimensions with CSS scaling for crisp rendering
       pdfCanvas.height = viewport.height;
       pdfCanvas.width = viewport.width;
       pdfCanvas.style.width = (viewport.width / baseScale) + 'px';
@@ -272,6 +313,8 @@
       drawCanvas.style.width = (viewport.width / baseScale) + 'px';
       drawCanvas.style.height = (viewport.height / baseScale) + 'px';
 
+      updateTransform();
+
       const renderContext = {
         canvasContext: pdfCtx,
         viewport: viewport
@@ -279,7 +322,6 @@
 
       await page.render(renderContext).promise;
 
-      // Automatically restore signature if previously painted on this page
       drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
       if (pageSignatures[num]) {
         const img = new Image();
@@ -293,14 +335,17 @@
       document.getElementById('next-page').disabled = num >= pdfDoc.numPages;
     }
 
-    // Auto-Save active drawing layer into page memory before switching pages
+    function updateTransform() {
+      pageWrapper.style.transform = `translate(${panX}px, ${panY}px)`;
+    }
+
     function autoSaveCurrentPage() {
       if (pdfDoc && drawCanvas.width > 0) {
         pageSignatures[pageNum] = drawCanvas.toDataURL('image/png');
       }
     }
 
-    // Page Navigation with Auto-Save
+    // Page Navigation
     document.getElementById('prev-page').addEventListener('click', () => {
       if (pageNum <= 1) return;
       autoSaveCurrentPage();
@@ -315,7 +360,7 @@
       renderPage(pageNum);
     });
 
-    // Zoom Controls with Auto-Save
+    // Zoom Controls
     document.getElementById('zoom-in').addEventListener('click', () => {
       if (currentZoom < 3.0) {
         autoSaveCurrentPage();
@@ -335,16 +380,73 @@
     document.getElementById('zoom-reset').addEventListener('click', () => {
       autoSaveCurrentPage();
       currentZoom = 1.0;
+      panX = 0; panY = 0;
       renderPage(pageNum);
     });
 
-    // Clear Signature on active page
     document.getElementById('clear-canvas').addEventListener('click', () => {
       drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
       delete pageSignatures[pageNum];
+      activeSigBox = null;
     });
 
-    // --- HIGH-DPI WET INK S PEN ENGINE ---
+    // --- TWO-FINGER ZOOM / PAN & SIGNATURE RESIZING ENGINE ---
+    let activeTouches = [];
+    let initialTouchDist = 0;
+    let initialZoom = 1.0;
+    let initialSigScale = 1.0;
+
+    function getDistance(t1, t2) {
+      const dx = t1.clientX - t2.clientX;
+      const dy = t1.clientY - t2.clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    viewerContainer.addEventListener('touchstart', (e) => {
+      activeTouches = Array.from(e.touches);
+
+      if (activeTouches.length === 2) {
+        // Two finger gesture initialized
+        isDrawing = false;
+        initialTouchDist = getDistance(activeTouches[0], activeTouches[1]);
+        initialZoom = currentZoom;
+
+        if (activeSigBox) {
+          initialSigScale = activeSigBox.scale;
+        }
+      }
+    }, { passive: false });
+
+    viewerContainer.addEventListener('touchmove', (e) => {
+      activeTouches = Array.from(e.touches);
+
+      if (activeTouches.length === 2) {
+        e.preventDefault(); // Prevent page scrolling
+
+        const currentDist = getDistance(activeTouches[0], activeTouches[1]);
+        const scaleChange = currentDist / initialTouchDist;
+
+        if (activeSigBox) {
+          // Resize active signature box with two fingers
+          activeSigBox.scale = Math.max(0.2, initialSigScale * scaleChange);
+          redrawActiveSignatureBox();
+        } else {
+          // Pinch Zoom page
+          currentZoom = Math.min(Math.max(0.5, initialZoom * scaleChange), 3.0);
+          renderPage(pageNum);
+        }
+      }
+    }, { passive: false });
+
+    viewerContainer.addEventListener('touchend', (e) => {
+      activeTouches = Array.from(e.touches);
+      if (activeTouches.length < 2 && activeSigBox) {
+        // Burn resized signature to page canvas when fingers lifted
+        commitActiveSignatureBox();
+      }
+    });
+
+    // --- S PEN / SINGLE TOUCH WET INK ENGINE ---
     function getPointerPos(e) {
       const rect = drawCanvas.getBoundingClientRect();
       const scaleX = drawCanvas.width / rect.width;
@@ -357,18 +459,20 @@
     }
 
     drawCanvas.addEventListener('pointerdown', (e) => {
+      // Ignore stroke if 2 fingers are active or touch tool is not pen/mouse/single finger
+      if (activeTouches.length >= 2) return;
+
       isDrawing = true;
       drawCanvas.setPointerCapture(e.pointerId);
       points = [getPointerPos(e)];
     });
 
     drawCanvas.addEventListener('pointermove', (e) => {
-      if (!isDrawing) return;
+      if (!isDrawing || activeTouches.length >= 2) return;
       points.push(getPointerPos(e));
 
       if (points.length < 3) return;
 
-      // Quadratic Bezier curves for smooth wet-ink stroke connections
       const p1 = points[points.length - 3];
       const p2 = points[points.length - 2];
       const p3 = points[points.length - 1];
@@ -384,7 +488,6 @@
       drawCtx.lineCap = 'round';
       drawCtx.lineJoin = 'round';
       
-      // Dynamic wet-ink width based on pressure and scale
       const width = Math.max(3, p2.pressure * 10 * baseScale);
       drawCtx.lineWidth = width;
       drawCtx.stroke();
@@ -395,11 +498,106 @@
       isDrawing = false;
       drawCanvas.releasePointerCapture(e.pointerId);
       points = [];
-      // Auto-save instantly after releasing pen stroke
       autoSaveCurrentPage();
     });
 
-    // --- HANDWRITTEN SIGNATURE GENERATOR ---
+    // --- ACTIVE RESIZABLE SIGNATURE BOX SYSTEM ---
+    function placeResizableSignature(dataUrl) {
+      const img = new Image();
+      img.onload = () => {
+        activeSigBox = {
+          img: img,
+          x: drawCanvas.width / 4,
+          y: drawCanvas.height / 3,
+          width: img.width / 2,
+          height: img.height / 2,
+          scale: 1.0
+        };
+        redrawActiveSignatureBox();
+      };
+      img.src = dataUrl;
+    }
+
+    function redrawActiveSignatureBox() {
+      if (!activeSigBox) return;
+
+      // Temporary redraw canvas state
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      if (pageSignatures[pageNum]) {
+        const bgImg = new Image();
+        bgImg.src = pageSignatures[pageNum];
+        drawCtx.drawImage(bgImg, 0, 0);
+      }
+
+      const w = activeSigBox.width * activeSigBox.scale;
+      const h = activeSigBox.height * activeSigBox.scale;
+
+      drawCtx.drawImage(activeSigBox.img, activeSigBox.x, activeSigBox.y, w, h);
+
+      // Draw bounding box outline for 2-finger resizing visual guidance
+      drawCtx.save();
+      drawCtx.strokeStyle = '#0d6efd';
+      drawCtx.lineWidth = 2 * baseScale;
+      drawCtx.setLineDash([6, 6]);
+      drawCtx.strokeRect(activeSigBox.x - 5, activeSigBox.y - 5, w + 10, h + 10);
+      drawCtx.restore();
+    }
+
+    function commitActiveSignatureBox() {
+      if (!activeSigBox) return;
+
+      const w = activeSigBox.width * activeSigBox.scale;
+      const h = activeSigBox.height * activeSigBox.scale;
+
+      // Draw permanent onto page signature layer
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      if (pageSignatures[pageNum]) {
+        const bgImg = new Image();
+        bgImg.src = pageSignatures[pageNum];
+        drawCtx.drawImage(bgImg, 0, 0);
+      }
+
+      drawCtx.drawImage(activeSigBox.img, activeSigBox.x, activeSigBox.y, w, h);
+      activeSigBox = null;
+      autoSaveCurrentPage();
+    }
+
+    // --- SESSION SIGNATURE LIBRARY ---
+    document.getElementById('save-sig-lib').addEventListener('click', () => {
+      const dataUrl = drawCanvas.toDataURL('image/png');
+      signatureLibrary.push(dataUrl);
+      
+      document.getElementById('lib-count').textContent = signatureLibrary.length;
+      alert("Signature saved to session library!");
+    });
+
+    const libModal = document.getElementById('lib-modal');
+    document.getElementById('open-lib-btn').addEventListener('click', () => {
+      const container = document.getElementById('library-container');
+      container.innerHTML = '';
+
+      if (signatureLibrary.length === 0) {
+        container.innerHTML = `<p style="color:#aaa; font-size: 13px;">No saved signatures in this session yet.</p>`;
+      } else {
+        signatureLibrary.forEach((sigUrl) => {
+          const img = document.createElement('img');
+          img.src = sigUrl;
+          img.className = 'sig-item';
+          img.onclick = () => {
+            placeResizableSignature(sigUrl);
+            libModal.style.display = 'none';
+          };
+          container.appendChild(img);
+        });
+      }
+      libModal.style.display = 'flex';
+    });
+
+    document.getElementById('close-lib-modal').addEventListener('click', () => {
+      libModal.style.display = 'none';
+    });
+
+    // Auto Signature Modal Handlers
     const sigModal = document.getElementById('sig-modal');
     document.getElementById('gen-sig-btn').addEventListener('click', () => {
       sigModal.style.display = 'flex';
@@ -412,21 +610,23 @@
       const name = document.getElementById('name-input').value.trim();
       if (!name) return;
 
-      // Render cursive text onto drawing canvas
-      drawCtx.save();
-      drawCtx.font = `${48 * baseScale}px 'Great Vibes', cursive`;
-      drawCtx.fillStyle = penColor;
-      drawCtx.textBaseline = 'middle';
-      drawCtx.fillText(name, drawCanvas.width / 4, drawCanvas.height / 2);
-      drawCtx.restore();
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 400 * baseScale;
+      tempCanvas.height = 150 * baseScale;
+      const tCtx = tempCanvas.getContext('2d');
 
-      autoSaveCurrentPage();
+      tCtx.font = `${48 * baseScale}px 'Great Vibes', cursive`;
+      tCtx.fillStyle = penColor;
+      tCtx.textBaseline = 'middle';
+      tCtx.fillText(name, 20, tempCanvas.height / 2);
+
+      placeResizableSignature(tempCanvas.toDataURL('image/png'));
       sigModal.style.display = 'none';
     });
 
-    // --- EXPORT PDF WITH ALL EMBEDDED SIGNATURES ---
+    // Export PDF with Signatures
     document.getElementById('save-btn').addEventListener('click', async () => {
-      autoSaveCurrentPage(); // Ensure latest active page is captured
+      autoSaveCurrentPage();
 
       const { PDFDocument } = PDFLib;
       const loadedPdf = await PDFDocument.load(rawPdfBytes);
@@ -438,7 +638,6 @@
         const dataUrl = pageSignatures[i];
         if (!dataUrl) continue;
 
-        // Verify page contains ink pixels
         const checkCanvas = document.createElement('canvas');
         checkCanvas.width = drawCanvas.width;
         checkCanvas.height = drawCanvas.height;
