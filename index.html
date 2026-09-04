@@ -3,10 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PDF Signer App</title>
+    <title>PDF Signer</title>
+    
+    <!-- React & Babel Libraries (Allows React to run directly in the browser) -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   </head>
   <body>
-    <!-- React will attach the app right inside this div -->
     <div id="root"></div>
+
+    <!-- Script connection to your React code -->
+    <script type="text/babel" src="src/index.js"></script>
   </body>
 </html>
