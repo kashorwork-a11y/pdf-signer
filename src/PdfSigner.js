@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+const { useState, useRef, useEffect } = React;
 
 export default function PdfSigner() {
   const [clickPos, setClickPos] = useState(null);
