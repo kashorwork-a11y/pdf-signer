@@ -14,23 +14,27 @@ function PdfSigner() {
   // Signature Color State (Default wet-ink blue #002B7F)
   const [penColor, setPenColor] = useState('#002B7F');
 
-  // Signatures saved across all pages: Array of { id, page, x, y, width, height, dataUrl }
+  // Session-Saved Signatures Library (Persists across uploaded PDFs)
+  const [savedSignatures, setSavedSignatures] = useState([]);
+  const [selectedSavedSig, setSelectedSavedSig] = useState(null);
+
+  // Signatures placed on the current PDF document: Array of { id, page, x, y, width, height, dataUrl }
   const [signatures, setSignatures] = useState([]);
   const [selectedSigId, setSelectedSigId] = useState(null);
 
   // Modal and Drawing state
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('saved'); // 'saved' or 'draw'
   const [pendingPos, setPendingPos] = useState({ x: 0, y: 0 });
   const [isDrawing, setIsDrawing] = useState(false);
   const canvasRef = useRef(null);
 
-  // Undo / Redo history for signatures
+  // Undo / Redo history for signatures on current PDF
   const [history, setHistory] = useState([[]]);
   const [historyStep, setHistoryStep] = useState(0);
 
-  // Dragging and Resizing Refs (using refs avoids closure bugs during mouse drag)
-  const activeActionRef = useRef(null); // { type: 'move'|'resize', id, startX, startY, sigX, sigY, startW, startH }
-
+  // Dragging and Resizing Refs
+  const activeActionRef = useRef(null);
   const pdfCanvasRef = useRef(null);
 
   // Helper to push history
@@ -56,7 +60,7 @@ function PdfSigner() {
     }
   };
 
-  // 1. Upload PDF
+  // 1. Upload PDF (Keeps savedSignatures intact!)
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file && file.type === 'application/pdf') {
@@ -106,22 +110,23 @@ function PdfSigner() {
     const y = (e.clientY - rect.top) / zoom;
 
     setPendingPos({ x, y });
+    setActiveTab(savedSignatures.length > 0 ? 'saved' : 'draw');
     setIsModalOpen(true);
   };
 
   // Drawing Canvas setup
   useEffect(() => {
-    if (isModalOpen && canvasRef.current) {
+    if (isModalOpen && activeTab === 'draw' && canvasRef.current) {
       const canvas = canvasRef.current;
       canvas.width = 500;
-      canvas.height = 250;
+      canvas.height = 200;
       const ctx = canvas.getContext('2d');
       ctx.lineWidth = 3;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.strokeStyle = penColor;
     }
-  }, [isModalOpen, penColor]);
+  }, [isModalOpen, activeTab, penColor]);
 
   const startDrawing = (e) => {
     const canvas = canvasRef.current;
@@ -156,12 +161,8 @@ function PdfSigner() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
-  // Apply signature to page
-  const applySignature = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dataUrl = canvas.toDataURL('image/png');
-
+  // Place signature on PDF
+  const placeSignature = (dataUrl) => {
     const defaultW = 150;
     const defaultH = 75;
 
@@ -177,6 +178,36 @@ function PdfSigner() {
 
     updateSignatures([...signatures, newSig]);
     setIsModalOpen(false);
+  };
+
+  // Save drawn signature to library and place on page
+  const handleApplyNewSignature = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dataUrl = canvas.toDataURL('image/png');
+
+    // Save to session library if not already present
+    if (!savedSignatures.includes(dataUrl)) {
+      setSavedSignatures((prev) => [...prev, dataUrl]);
+    }
+
+    placeSignature(dataUrl);
+  };
+
+  // Place selected existing saved signature
+  const handleApplySavedSignature = () => {
+    if (selectedSavedSig) {
+      placeSignature(selectedSavedSig);
+    }
+  };
+
+  // Delete saved signature from library
+  const deleteSavedSignature = (e, targetSig) => {
+    e.stopPropagation();
+    setSavedSignatures((prev) => prev.filter((s) => s !== targetSig));
+    if (selectedSavedSig === targetSig) {
+      setSelectedSavedSig(null);
+    }
   };
 
   // Drag & Resize mouse handlers
@@ -379,41 +410,120 @@ function PdfSigner() {
       {isModalOpen && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
-            <h3>Draw Your Signature</h3>
+            {/* Modal Tabs */}
+            <div style={styles.tabContainer}>
+              <button
+                style={{
+                  ...styles.tabBtn,
+                  borderBottom: activeTab === 'saved' ? '2px solid #2563EB' : '2px solid transparent',
+                  color: activeTab === 'saved' ? '#2563EB' : '#64748B',
+                }}
+                onClick={() => setActiveTab('saved')}
+              >
+                Saved Signatures ({savedSignatures.length})
+              </button>
+              <button
+                style={{
+                  ...styles.tabBtn,
+                  borderBottom: activeTab === 'draw' ? '2px solid #2563EB' : '2px solid transparent',
+                  color: activeTab === 'draw' ? '#2563EB' : '#64748B',
+                }}
+                onClick={() => setActiveTab('draw')}
+              >
+                Draw New
+              </button>
+            </div>
 
-            {/* Color Selector */}
-            <div style={styles.colorPickerContainer}>
-              <span style={{ fontSize: '14px', fontWeight: 600, color: '#475569' }}>Ink Color:</span>
-              {colorOptions.map((c) => (
-                <button
-                  key={c.value}
-                  onClick={() => setPenColor(c.value)}
-                  style={{
-                    ...styles.colorCircle,
-                    backgroundColor: c.value,
-                    outline: penColor === c.value ? '2px solid #2563EB' : 'none',
-                    outlineOffset: '2px',
-                  }}
-                  title={c.label}
+            {/* Saved Signatures Tab */}
+            {activeTab === 'saved' && (
+              <div style={styles.savedTabContent}>
+                {savedSignatures.length === 0 ? (
+                  <p style={{ color: '#64748B', textAlign: 'center', margin: '30px 0' }}>
+                    No saved signatures yet. Switch to "Draw New" to create one.
+                  </p>
+                ) : (
+                  <div style={styles.sigGrid}>
+                    {savedSignatures.map((sigUrl, index) => (
+                      <div
+                        key={index}
+                        style={{
+                          ...styles.sigCard,
+                          border: selectedSavedSig === sigUrl ? '2px solid #2563EB' : '1px solid #CBD5E1',
+                        }}
+                        onClick={() => setSelectedSavedSig(sigUrl)}
+                      >
+                        <img src={sigUrl} style={{ width: '100%', height: '80px', objectFit: 'contain' }} alt="Saved Signature" />
+                        <button
+                          style={styles.deleteSigBtn}
+                          onClick={(e) => deleteSavedSignature(e, sigUrl)}
+                          title="Delete signature"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div style={styles.modalActions}>
+                  <button style={{ ...styles.btn, backgroundColor: '#FEE2E2', color: '#DC2626' }} onClick={() => setIsModalOpen(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    style={{ ...styles.btn, backgroundColor: selectedSavedSig ? '#2563EB' : '#94A3B8', color: '#FFF' }}
+                    disabled={!selectedSavedSig}
+                    onClick={handleApplySavedSignature}
+                  >
+                    Place Signature
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Draw New Signature Tab */}
+            {activeTab === 'draw' && (
+              <div>
+                <div style={styles.colorPickerContainer}>
+                  <span style={{ fontSize: '14px', fontWeight: 600, color: '#475569' }}>Ink Color:</span>
+                  {colorOptions.map((c) => (
+                    <button
+                      key={c.value}
+                      onClick={() => setPenColor(c.value)}
+                      style={{
+                        ...styles.colorCircle,
+                        backgroundColor: c.value,
+                        outline: penColor === c.value ? '2px solid #2563EB' : 'none',
+                        outlineOffset: '2px',
+                      }}
+                      title={c.label}
+                    />
+                  ))}
+                </div>
+
+                <canvas
+                  ref={canvasRef}
+                  style={styles.drawCanvas}
+                  onMouseDown={startDrawing}
+                  onMouseMove={draw}
+                  onMouseUp={stopDrawing}
+                  onTouchStart={startDrawing}
+                  onTouchMove={draw}
+                  onTouchEnd={stopDrawing}
                 />
-              ))}
-            </div>
 
-            <canvas
-              ref={canvasRef}
-              style={styles.drawCanvas}
-              onMouseDown={startDrawing}
-              onMouseMove={draw}
-              onMouseUp={stopDrawing}
-              onTouchStart={startDrawing}
-              onTouchMove={draw}
-              onTouchEnd={stopDrawing}
-            />
-            <div style={styles.modalActions}>
-              <button style={{ ...styles.btn, backgroundColor: '#E2E8F0' }} onClick={clearCanvas}>Clear</button>
-              <button style={{ ...styles.btn, backgroundColor: '#FEE2E2', color: '#DC2626' }} onClick={() => setIsModalOpen(false)}>Cancel</button>
-              <button style={{ ...styles.btn, backgroundColor: '#2563EB', color: '#FFF' }} onClick={applySignature}>Apply Signature</button>
-            </div>
+                <div style={styles.modalActions}>
+                  <button style={{ ...styles.btn, backgroundColor: '#E2E8F0' }} onClick={clearCanvas}>
+                    Clear
+                  </button>
+                  <button style={{ ...styles.btn, backgroundColor: '#FEE2E2', color: '#DC2626' }} onClick={() => setIsModalOpen(false)}>
+                    Cancel
+                  </button>
+                  <button style={{ ...styles.btn, backgroundColor: '#2563EB', color: '#FFF' }} onClick={handleApplyNewSignature}>
+                    Save & Place Signature
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -432,7 +542,13 @@ const styles = {
   pdfViewerContainer: { flex: 1, overflow: 'auto', display: 'flex', justifyContent: 'center', padding: '20px', backgroundColor: '#CBD5E1' },
   resizeHandle: { position: 'absolute', right: '-8px', bottom: '-8px', width: '16px', height: '16px', backgroundColor: '#2563EB', border: '2px solid #FFF', borderRadius: '3px', cursor: 'nwse-resize', zIndex: 10 },
   modalOverlay: { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 999 },
-  modalContent: { backgroundColor: '#FFF', padding: '24px', borderRadius: '12px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' },
+  modalContent: { backgroundColor: '#FFF', padding: '24px', borderRadius: '12px', width: '520px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' },
+  tabContainer: { display: 'flex', gap: '16px', borderBottom: '1px solid #E2E8F0', marginBottom: '16px' },
+  tabBtn: { background: 'none', border: 'none', padding: '8px 4px', fontWeight: 600, fontSize: '15px', cursor: 'pointer' },
+  savedTabContent: { display: 'flex', flexDirection: 'column', gap: '16px' },
+  sigGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', maxHeight: '240px', overflowY: 'auto', padding: '4px' },
+  sigCard: { position: 'relative', borderRadius: '8px', padding: '8px', backgroundColor: '#FAFAFA', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  deleteSigBtn: { position: 'absolute', top: '4px', right: '4px', background: '#EF4444', color: '#FFF', border: 'none', borderRadius: '50%', width: '20px', height: '20px', cursor: 'pointer', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   colorPickerContainer: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' },
   colorCircle: { width: '22px', height: '22px', borderRadius: '50%', border: 'none', cursor: 'pointer' },
   drawCanvas: { border: '1px solid #CBD5E1', borderRadius: '8px', cursor: 'crosshair', backgroundColor: '#FAFAFA', touchAction: 'none' },
