@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>S Pen PDF Multi-Page Signer</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <style>
+    :root {
+      --bg-color: #121212;
+      --panel-bg: #1e1e1e;
+      --accent-color: #0d6efd;
+      --text-color: #ffffff;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      touch-action: none;
+    }
+    header {
+      background-color: var(--panel-bg);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+      z-index: 10;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .btn-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    button, label.btn {
+      background-color: #2c2c2c;
+      color: white;
+      border: 1px solid #444;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      display: inline-block;
+    }
+    button:active, label.btn:active {
+      background-color: var(--accent-color);
+    }
+    button.primary {
+      background-color: var(--accent-color);
+      border-color: var(--accent-color);
+    }
+    input[type="file"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+    .color-picker {
+      width: 32px;
+      height: 32px;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      background: none;
+    }
+    #viewer-container {
+      flex: 1;
+      overflow: auto;
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 20px;
+    }
+    .page-wrapper {
+      position: relative;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      background-color: white;
+    }
+    canvas {
+      display: block;
+    }
+    .drawing-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 5;
+      touch-action: none;
+    }
+    .page-indicator {
+      font-weight: bold;
+      font-size: 14px;
+    }
+    #drop-zone {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      border: 2px dashed #666;
+      border-radius: 12px;
+      padding: 40px;
+      text-align: center;
+      background: rgba(30, 30, 30, 0.9);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="btn-group">
+      <button id="open-btn">📁 Open PDF</button>
+      <input type="file" id="pdf-input" accept="application/pdf,*/*">
+      <button id="save-btn" class="primary" disabled>💾 Save Signed PDF</button>
+    </div>
+
+    <div class="btn-group">
+      <button id="prev-page" disabled>❮</button>
+      <span class="page-indicator">Page <span id="page-num">0</span> / <span id="page-count">0</span></span>
+      <button id="next-page" disabled>❯</button>
+    </div>
+
+    <div class="btn-group">
+      <input type="color" id="pen-color" class="color-picker" value="#00008b" title="Pen Color">
+      <button id="clear-page">🧹 Clear Page</button>
+    </div>
+  </header>
+
+  <div id="viewer-container">
+    <div id="drop-zone">
+      <h3>Tap "Open PDF" or select a file</h3>
+      <p>Supports Samsung Note S Pen input directly on pages.</p>
+    </div>
+    <div class="page-wrapper" id="page-wrapper" style="display:none;">
+      <canvas id="pdf-render"></canvas>
+      <canvas id="draw-canvas" class="drawing-canvas"></canvas>
+    </div>
+  </div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+    let pdfDoc = null;
+    let pageNum = 1;
+    let scale = 1.5;
+    let rawPdfBytes = null;
+    const pageSignatures = {};
+
+    const pdfCanvas = document.getElementById('pdf-render');
+    const pdfCtx = pdfCanvas.getContext('2d');
+    const drawCanvas = document.getElementById('draw-canvas');
+    const drawCtx = drawCanvas.getContext('2d');
+    const fileInput = document.getElementById('pdf-input');
+    const openBtn = document.getElementById('open-btn');
+
+    let isDrawing = false;
+    let penColor = document.getElementById('pen-color').value;
+
+    document.getElementById('pen-color').addEventListener('change', (e) => {
+      penColor = e.target.value;
+    });
+
+    openBtn.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      document.getElementById('drop-zone').style.display = 'none';
+      document.getElementById('page-wrapper').style.display = 'block';
+
+      rawPdfBytes = await file.arrayBuffer();
+      const loadingTask = pdfjsLib.getDocument({ data: rawPdfBytes });
+      pdfDoc = await loadingTask.promise;
+
+      document.getElementById('page-count').textContent = pdfDoc.numPages;
+      document.getElementById('save-btn').disabled = false;
+      
+      pageNum = 1;
+      renderPage(pageNum);
+    });
+
+    async function renderPage(num) {
+      saveCurrentPageSignature();
+
+      const page = await pdfDoc.getPage(num);
+      const viewport = page.getViewport({ scale: scale });
+
+      pdfCanvas.height = viewport.height;
+      pdfCanvas.width = viewport.width;
+      drawCanvas.height = viewport.height;
+      drawCanvas.width = viewport.width;
+
+      const renderContext = {
+        canvasContext: pdfCtx,
+        viewport: viewport
+      };
+
+      await page.render(renderContext).promise;
+
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      if (pageSignatures[num]) {
+        const img = new Image();
+        img.onload = () => drawCtx.drawImage(img, 0, 0);
+        img.src = pageSignatures[num];
+      }
+
+      document.getElementById('page-num').textContent = num;
+      document.getElementById('prev-page').disabled = num <= 1;
+      document.getElementById('next-page').disabled = num >= pdfDoc.numPages;
+    }
+
+    function saveCurrentPageSignature() {
+      if (pdfDoc) {
+        pageSignatures[pageNum] = drawCanvas.toDataURL('image/png');
+      }
+    }
+
+    document.getElementById('prev-page').addEventListener('click', () => {
+      if (pageNum <= 1) return;
+      pageNum--;
+      renderPage(pageNum);
+    });
+
+    document.getElementById('next-page').addEventListener('click', () => {
+      if (pageNum >= pdfDoc.numPages) return;
+      pageNum++;
+      renderPage(pageNum);
+    });
+
+    document.getElementById('clear-page').addEventListener('click', () => {
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      delete pageSignatures[pageNum];
+    });
+
+    function getPointerPos(e) {
+      const rect = drawCanvas.getBoundingClientRect();
+      return {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        pressure: e.pressure || 0.5
+      };
+    }
+
+    drawCanvas.addEventListener('pointerdown', (e) => {
+      isDrawing = true;
+      drawCanvas.setPointerCapture(e.pointerId);
+      const pos = getPointerPos(e);
+
+      drawCtx.beginPath();
+      drawCtx.moveTo(pos.x, pos.y);
+      drawCtx.strokeStyle = penColor;
+      drawCtx.lineCap = 'round';
+      drawCtx.lineJoin = 'round';
+      drawCtx.lineWidth = Math.max(1.5, pos.pressure * 6);
+    });
+
+    drawCanvas.addEventListener('pointermove', (e) => {
+      if (!isDrawing) return;
+      const pos = getPointerPos(e);
+
+      drawCtx.lineWidth = Math.max(1.5, pos.pressure * 6);
+      drawCtx.lineTo(pos.x, pos.y);
+      drawCtx.stroke();
+    });
+
+    drawCanvas.addEventListener('pointerup', (e) => {
+      if (!isDrawing) return;
+      isDrawing = false;
+      drawCanvas.releasePointerCapture(e.pointerId);
+    });
+
+    document.getElementById('save-btn').addEventListener('click', async () => {
+      saveCurrentPageSignature();
+
+      const { PDFDocument } = PDFLib;
+      const loadedPdf = await PDFDocument.load(rawPdfBytes);
+      const pages = loadedPdf.getPages();
+
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        const dataUrl = pageSignatures[i];
+        if (!dataUrl) continue;
+
+        const imgCanvas = document.createElement('canvas');
+        imgCanvas.width = drawCanvas.width;
+        imgCanvas.height = drawCanvas.height;
+        const imgCtx = imgCanvas.getContext('2d');
+        const img = new Image();
+        
+        await new Promise((resolve) => {
+          img.onload = resolve;
+          img.src = dataUrl;
+        });
+
+        imgCtx.drawImage(img, 0, 0);
+        const imgData = imgCtx.getImageData(0, 0, imgCanvas.width, imgCanvas.height).data;
+        const hasContent = imgData.some(pixel => pixel !== 0);
+
+        if (hasContent) {
+          const pngImage = await loadedPdf.embedPng(dataUrl);
+          const pdfPage = pages[i - 1];
+          const { width, height } = pdfPage.getSize();
+
+          pdfPage.drawImage(pngImage, {
+            x: 0,
+            y: 0,
+            width: width,
+            height: height,
+          });
+        }
+      }
+
+      const pdfBytes = await loadedPdf.save();
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'signed_document.pdf';
+      link.click();
+    });
+  </script>
+</body>
+</html>
