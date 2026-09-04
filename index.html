@@ -4,8 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF Viewer & Signing Tool</title>
-  <!-- PDF.js Library -->
+  <!-- PDF.js Library (for rendering) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <!-- PDF-Lib (for exporting signed PDFs) -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <style>
     * {
       box-sizing: border-box;
@@ -21,7 +23,7 @@
     }
 
     /* -------------------------------------------------------------
-       FLOATING OVERLAY UI (Stays fixed regardless of scroll/zoom)
+       FLOATING OVERLAY UI
        ------------------------------------------------------------- */
     .ui-overlay {
       position: fixed;
@@ -67,7 +69,7 @@
     .btn-secondary:hover { background-color: #545b62; }
     .btn-success { background-color: #28a745; }
     .btn-success:hover { background-color: #218838; }
-    .btn-active { background-color: #dc3545; } /* Highlight for Sign Mode */
+    .btn-active { background-color: #dc3545; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .file-input { display: none; }
@@ -79,6 +81,24 @@
       padding: 0 6px;
     }
 
+    .color-picker-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: bold;
+      color: #333;
+    }
+
+    .color-picker {
+      border: none;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      cursor: pointer;
+      background: none;
+    }
+
     /* -------------------------------------------------------------
        SIGNATURE LIBRARY DRAWER
        ------------------------------------------------------------- */
@@ -86,7 +106,7 @@
       position: fixed;
       right: 15px;
       top: 70px;
-      width: 240px;
+      width: 250px;
       background: #ffffff;
       border-radius: 12px;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
@@ -102,6 +122,7 @@
     .library-drawer.open { display: flex; }
 
     .library-item {
+      position: relative;
       border: 1px solid #ddd;
       border-radius: 6px;
       padding: 6px;
@@ -115,6 +136,28 @@
       height: auto;
       display: block;
       margin: 0 auto;
+    }
+
+    .delete-btn {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      background: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      font-size: 12px;
+      line-height: 20px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .delete-btn:hover {
+      background: #bd2130;
     }
 
     /* -------------------------------------------------------------
@@ -142,25 +185,25 @@
       display: block;
     }
 
-    /* Freehand drawing canvas layer */
     canvas.drawing-canvas {
       position: absolute;
       top: 0;
       left: 0;
       z-index: 5;
-      touch-action: none; /* Allows S Pen and touch drawing without screen panning */
+      touch-action: none;
     }
 
-    /* Draggable Signature Item */
     .pdf-signature {
       position: absolute;
-      cursor: grab;
+      cursor: move;
       border: 2px dashed #007bff;
       padding: 2px;
       background: rgba(255, 255, 255, 0.8);
       border-radius: 4px;
       z-index: 10;
       display: inline-block;
+      user-select: none;
+      touch-action: none;
     }
 
     .pdf-signature img {
@@ -193,6 +236,12 @@
       <!-- Mode Toggle -->
       <button class="btn btn-secondary" id="modeBtn" onclick="toggleMode()">Mode: Navigation</button>
       
+      <!-- Signature Ink Color Picker (Default Ink Blue #000080) -->
+      <div class="color-picker-wrapper" id="colorPickerContainer" style="display: none;">
+        <span>Color:</span>
+        <input type="color" id="sigColor" class="color-picker" value="#000080" onchange="updateInkColor(this.value)">
+      </div>
+
       <!-- Save Freehand Signature -->
       <button class="btn" id="saveSigBtn" onclick="saveCurrentDrawingToLibrary()" style="display: none;">Save Signature</button>
 
@@ -202,13 +251,16 @@
 
       <!-- Library Toggle -->
       <button class="btn btn-secondary" onclick="toggleLibrary()">Signature Library</button>
+
+      <!-- EXPORT BUTTON -->
+      <button class="btn btn-success" id="exportBtn" onclick="exportSignedPdf()" disabled>Export Signed PDF</button>
     </div>
 
     <!-- SIGNATURE LIBRARY DRAWER -->
     <div class="library-drawer" id="libraryDrawer">
       <strong>Signature Library</strong>
       <div id="libraryList" style="display: flex; flex-direction: column; gap: 8px;">
-        <span style="font-size: 12px; color: #777;">No saved signatures yet.</span>
+        <span id="emptyLibText" style="font-size: 12px; color: #777;">No saved signatures yet.</span>
       </div>
     </div>
 
@@ -220,7 +272,6 @@
       
       <span style="border-left: 1px solid #ccc; height: 20px; margin: 0 4px;"></span>
 
-      <!-- Streamlined Zoom Buttons -->
       <button class="btn" onclick="adjustZoom(0.1)">+</button>
       <button class="btn" onclick="adjustZoom(-0.1)">-</button>
       <button class="btn btn-secondary" onclick="resetZoom()">Reset</button>
@@ -241,15 +292,21 @@
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
 
     let pdfDoc = null;
+    let originalPdfBytes = null;
     let pageNum = 1;
     let currentScale = 1.0;
     let isSignMode = false;
-    
+    let inkColor = '#000080'; // Ink Blue Default
+
+    // Automatic Per-Page Storage
+    let pageSignatures = {};
+    let pageDrawings = {};
+
     // Dragging State
     let activeSignature = null;
     let dragOffset = { x: 0, y: 0 };
 
-    // Drawing State (S Pen / Finger)
+    // Drawing State
     let isDrawing = false;
     let hasDrawnStroke = false;
 
@@ -263,18 +320,23 @@
     const drawCanvas = document.getElementById('drawCanvas');
     const drawCtx = drawCanvas.getContext('2d');
 
-    // --- 1. PDF LOADING & RENDERING ---
+    // --- 1. PDF LOADING & PAGE MANAGEMENT ---
     function loadPdfFile(event) {
       const file = event.target.files[0];
       if (!file) return;
 
       const fileReader = new FileReader();
       fileReader.onload = function () {
-        const typedarray = new Uint8Array(this.result);
+        originalPdfBytes = this.result;
+        const typedarray = new Uint8Array(this.result.slice(0));
+        
         pdfjsLib.getDocument(typedarray).promise.then(pdf => {
           pdfDoc = pdf;
           pageNum = 1;
+          pageSignatures = {};
+          pageDrawings = {};
           document.getElementById('placeholder').style.display = 'none';
+          document.getElementById('exportBtn').disabled = false;
           renderPage(pageNum);
           saveState();
         });
@@ -282,11 +344,58 @@
       fileReader.readAsArrayBuffer(file);
     }
 
+    function saveCurrentPageData() {
+      if (!pdfDoc) return;
+      
+      const signatures = [];
+      document.querySelectorAll('.pdf-signature').forEach(sig => {
+        const img = sig.querySelector('img');
+        signatures.push({
+          left: parseFloat(sig.style.left) || 0,
+          top: parseFloat(sig.style.top) || 0,
+          width: img ? img.width : 150,
+          height: img ? img.height : 75,
+          src: img ? img.src : ''
+        });
+      });
+      pageSignatures[pageNum] = signatures;
+      pageDrawings[pageNum] = drawCanvas.toDataURL();
+    }
+
+    function restorePageData(targetPage) {
+      document.querySelectorAll('.pdf-signature').forEach(el => el.remove());
+
+      if (pageSignatures[targetPage]) {
+        pageSignatures[targetPage].forEach(sigData => {
+          const sigWrapper = document.createElement('div');
+          sigWrapper.className = 'pdf-signature';
+          sigWrapper.style.left = `${sigData.left}px`;
+          sigWrapper.style.top = `${sigData.top}px`;
+
+          const img = document.createElement('img');
+          img.src = sigData.src;
+          img.style.width = `${sigData.width}px`;
+
+          sigWrapper.appendChild(img);
+          makeDraggable(sigWrapper);
+          pdfPage.appendChild(sigWrapper);
+        });
+      }
+
+      clearDrawingCanvas();
+      if (pageDrawings[targetPage]) {
+        const img = new Image();
+        img.src = pageDrawings[targetPage];
+        img.onload = function () {
+          drawCtx.drawImage(img, 0, 0);
+        };
+      }
+    }
+
     function renderPage(num) {
       pdfDoc.getPage(num).then(page => {
         const viewport = page.getViewport({ scale: 1.5 });
         
-        // Match canvas dimensions
         pdfCanvas.height = viewport.height;
         pdfCanvas.width = viewport.width;
         drawCanvas.height = viewport.height;
@@ -296,7 +405,9 @@
         pdfPage.style.height = viewport.height + 'px';
 
         const renderContext = { canvasContext: pdfCtx, viewport: viewport };
-        page.render(renderContext);
+        page.render(renderContext).promise.then(() => {
+          restorePageData(num);
+        });
 
         document.getElementById('pageInfo').textContent = `Page ${num} / ${pdfDoc.numPages}`;
         initDrawingCanvas();
@@ -306,8 +417,8 @@
     function changePage(delta) {
       if (!pdfDoc) return;
       if (pageNum + delta >= 1 && pageNum + delta <= pdfDoc.numPages) {
+        saveCurrentPageData();
         pageNum += delta;
-        clearDrawingCanvas();
         renderPage(pageNum);
       }
     }
@@ -328,20 +439,28 @@
       isSignMode = !isSignMode;
       const modeBtn = document.getElementById('modeBtn');
       const saveBtn = document.getElementById('saveSigBtn');
+      const colorContainer = document.getElementById('colorPickerContainer');
 
       if (isSignMode) {
         modeBtn.textContent = 'Mode: Sign';
         modeBtn.classList.remove('btn-secondary');
         modeBtn.classList.add('btn-active');
         saveBtn.style.display = 'inline-block';
-        drawCanvas.style.pointerEvents = 'auto'; // Enable Pen/Finger Drawing
+        colorContainer.style.display = 'flex';
+        drawCanvas.style.pointerEvents = 'auto';
       } else {
         modeBtn.textContent = 'Mode: Navigation';
         modeBtn.classList.remove('btn-active');
         modeBtn.classList.add('btn-secondary');
         saveBtn.style.display = 'none';
-        drawCanvas.style.pointerEvents = 'none'; // Allow dragging through signatures
+        colorContainer.style.display = 'none';
+        drawCanvas.style.pointerEvents = 'none';
       }
+    }
+
+    function updateInkColor(color) {
+      inkColor = color;
+      drawCtx.strokeStyle = inkColor;
     }
 
     function toggleLibrary() {
@@ -350,7 +469,7 @@
 
     // --- 4. S PEN / TOUCH FREEHAND DRAWING ---
     function initDrawingCanvas() {
-      drawCtx.strokeStyle = '#000000';
+      drawCtx.strokeStyle = inkColor;
       drawCtx.lineWidth = 3;
       drawCtx.lineCap = 'round';
       drawCtx.lineJoin = 'round';
@@ -403,7 +522,7 @@
     drawCanvas.addEventListener('touchmove', draw, { passive: false });
     drawCanvas.addEventListener('touchend', stopDrawing);
 
-    // --- 5. DRAG AND DROP SIGNATURES (Navigation & Library Items) ---
+    // --- 5. INSTANT DRAG MOVEMENT ---
     function makeDraggable(element) {
       element.addEventListener('mousedown', startDrag);
       element.addEventListener('touchstart', startDrag, { passive: false });
@@ -452,7 +571,7 @@
       document.removeEventListener('touchend', stopDrag);
     }
 
-    // --- 6. SAVE SIGNATURE TO LIBRARY ---
+    // --- 6. SIGNATURE LIBRARY ---
     function saveCurrentDrawingToLibrary() {
       if (!hasDrawnStroke) {
         alert("Please draw a signature first using Sign Mode.");
@@ -462,28 +581,37 @@
       const dataUrl = drawCanvas.toDataURL('image/png');
       addSignatureToLibrary(dataUrl);
       clearDrawingCanvas();
-      toggleMode(); // Switch back to Navigation Mode
+      toggleMode();
     }
 
     function addSignatureToLibrary(dataUrl) {
       const libraryList = document.getElementById('libraryList');
-      
-      // Clear placeholder label if present
-      if (libraryList.querySelector('span')) {
-        libraryList.innerHTML = '';
-      }
+      const emptyText = document.getElementById('emptyLibText');
+      if (emptyText) emptyText.style.display = 'none';
 
       const item = document.createElement('div');
       item.className = 'library-item';
-      
+
       const img = document.createElement('img');
       img.src = dataUrl;
-      item.appendChild(img);
 
-      item.onclick = function () {
+      img.onclick = function () {
         insertSignatureFromLibrary(dataUrl);
       };
 
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'delete-btn';
+      deleteBtn.innerHTML = '×';
+      deleteBtn.onclick = function (e) {
+        e.stopPropagation();
+        item.remove();
+        if (libraryList.children.length <= 1) {
+          if (emptyText) emptyText.style.display = 'block';
+        }
+      };
+
+      item.appendChild(deleteBtn);
+      item.appendChild(img);
       libraryList.appendChild(item);
       toggleLibrary();
     }
@@ -505,29 +633,17 @@
       saveState();
     }
 
-    // --- 7. UNDO AND REDO HISTORY SYSTEM ---
+    // --- 7. UNDO & REDO HISTORY ---
     function saveState() {
-      // Truncate future steps if drawing/adding after undoing
       if (historyStep < historyStack.length - 1) {
         historyStack = historyStack.slice(0, historyStep + 1);
       }
 
-      // Record state of placed signatures
-      const signatures = [];
-      document.querySelectorAll('.pdf-signature').forEach(sig => {
-        signatures.push({
-          left: sig.style.left,
-          top: sig.style.top,
-          html: sig.innerHTML
-        });
-      });
-
-      // Record drawing canvas state
-      const drawingData = drawCanvas.toDataURL();
+      saveCurrentPageData();
 
       historyStack.push({
-        signatures: signatures,
-        drawingData: drawingData
+        signatures: JSON.parse(JSON.stringify(pageSignatures)),
+        drawings: JSON.parse(JSON.stringify(pageDrawings))
       });
 
       historyStep++;
@@ -537,47 +653,94 @@
     function undo() {
       if (historyStep > 0) {
         historyStep--;
-        restoreState(historyStack[historyStep]);
+        restoreGlobalState(historyStack[historyStep]);
       }
     }
 
     function redo() {
       if (historyStep < historyStack.length - 1) {
         historyStep++;
-        restoreState(historyStack[historyStep]);
+        restoreGlobalState(historyStack[historyStep]);
       }
     }
 
-    function restoreState(state) {
-      // 1. Clear existing signatures
-      document.querySelectorAll('.pdf-signature').forEach(el => el.remove());
-
-      // 2. Re-create signatures
-      state.signatures.forEach(sigData => {
-        const sigWrapper = document.createElement('div');
-        sigWrapper.className = 'pdf-signature';
-        sigWrapper.style.left = sigData.left;
-        sigWrapper.style.top = sigData.top;
-        sigWrapper.innerHTML = sigData.html;
-
-        makeDraggable(sigWrapper);
-        pdfPage.appendChild(sigWrapper);
-      });
-
-      // 3. Restore freehand drawing canvas
-      const img = new Image();
-      img.src = state.drawingData;
-      img.onload = function () {
-        drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-        drawCtx.drawImage(img, 0, 0);
-      };
-
+    function restoreGlobalState(state) {
+      pageSignatures = JSON.parse(JSON.stringify(state.signatures));
+      pageDrawings = JSON.parse(JSON.stringify(state.drawings));
+      restorePageData(pageNum);
       updateUndoRedoButtons();
     }
 
     function updateUndoRedoButtons() {
       document.getElementById('undoBtn').disabled = historyStep <= 0;
       document.getElementById('redoBtn').disabled = historyStep >= historyStack.length - 1;
+    }
+
+    // --- 8. EXPORT SIGNED PDF FEATURE ---
+    async function exportSignedPdf() {
+      if (!originalPdfBytes) return;
+
+      // Save latest state of current active page
+      saveCurrentPageData();
+
+      const { PDFDocument } = PDFLib;
+      const pdfDocExport = await PDFDocument.load(originalPdfBytes);
+      const pages = pdfDocExport.getPages();
+
+      for (let i = 1; i <= pages.length; i++) {
+        const page = pages[i - 1];
+        const pdfLibWidth = page.getWidth();
+        const pdfLibHeight = page.getHeight();
+
+        // 1. Embed Freehand Drawing Layer (if exists)
+        if (pageDrawings[i]) {
+          const drawImg = await pdfDocExport.embedPng(pageDrawings[i]);
+          page.drawImage(drawImg, {
+            x: 0,
+            y: 0,
+            width: pdfLibWidth,
+            height: pdfLibHeight
+          });
+        }
+
+        // 2. Embed Positioned Signatures (if exist)
+        if (pageSignatures[i]) {
+          const screenCanvasWidth = drawCanvas.width;
+          const screenCanvasHeight = drawCanvas.height;
+
+          // Conversion scale factor between viewer canvas and PDF points
+          const scaleX = pdfLibWidth / screenCanvasWidth;
+          const scaleY = pdfLibHeight / screenCanvasHeight;
+
+          for (const sig of pageSignatures[i]) {
+            if (sig.src) {
+              const sigImg = await pdfDocExport.embedPng(sig.src);
+
+              const pdfX = sig.left * scaleX;
+              const pdfWidth = sig.width * scaleX;
+              const pdfHeight = sig.height * scaleY;
+              
+              // PDF.js coordinates use Top-Left as origin; PDF-Lib uses Bottom-Left
+              const pdfY = pdfLibHeight - (sig.top * scaleY) - pdfHeight;
+
+              page.drawImage(sigImg, {
+                x: pdfX,
+                y: pdfY,
+                width: pdfWidth,
+                height: pdfHeight
+              });
+            }
+          }
+        }
+      }
+
+      // Generate PDF file and trigger direct download
+      const pdfBytes = await pdfDocExport.save();
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'signed_document.pdf';
+      link.click();
     }
   </script>
 </body>
