@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>S Pen PDF Multi-Page Signer</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
@@ -12,7 +12,14 @@
       --bg-color: #121212;
       --panel-bg: #1e1e1e;
       --accent-color: #0d6efd;
+      --active-green: #198754;
       --text-color: #ffffff;
+      --header-height: 56px;
+      --bottom-bar-height: 54px;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
     }
     body {
       margin: 0;
@@ -24,108 +31,157 @@
       display: flex;
       flex-direction: column;
       height: 100vh;
-      touch-action: none;
     }
+    
+    /* Top Mobile Action Header */
     header {
+      height: var(--header-height);
       background-color: var(--panel-bg);
-      padding: 8px 12px;
+      padding: 0 10px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-      z-index: 10;
-      flex-wrap: wrap;
-      gap: 6px;
+      border-bottom: 1px solid #333;
+      z-index: 20;
     }
+
     .btn-group {
       display: flex;
-      gap: 6px;
       align-items: center;
+      gap: 6px;
     }
+
     button, label.btn {
       background-color: #2c2c2c;
       color: white;
       border: 1px solid #444;
-      padding: 6px 10px;
-      border-radius: 6px;
+      padding: 8px 12px;
+      border-radius: 8px;
       cursor: pointer;
       font-size: 13px;
-      display: inline-block;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       white-space: nowrap;
+      user-select: none;
     }
     button:active, label.btn:active {
-      background-color: var(--accent-color);
+      opacity: 0.8;
+    }
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
     }
     button.primary {
       background-color: var(--accent-color);
       border-color: var(--accent-color);
     }
+    
+    /* Dedicated Signing Mode Toggle */
+    #mode-toggle {
+      background-color: #333;
+      border: 1px solid #555;
+      color: #fff;
+      font-weight: bold;
+      transition: all 0.2s ease;
+    }
+    #mode-toggle.active {
+      background-color: var(--active-green);
+      border-color: var(--active-green);
+      box-shadow: 0 0 10px rgba(25, 135, 84, 0.5);
+    }
+
     input[type="file"] {
       position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      border: 0;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0,0,0,0); border: 0;
     }
     .color-picker {
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       border: none;
       border-radius: 50%;
       cursor: pointer;
       background: none;
     }
+
+    /* Viewer Canvas Box */
     #viewer-container {
       flex: 1;
       overflow: auto;
       position: relative;
+      background-color: #1a1a1a;
       display: flex;
       justify-content: center;
       align-items: flex-start;
-      padding: 20px;
+      padding: 16px;
+      /* Default allows native smooth scrolling and pinch-zooming */
+      touch-action: pan-x pan-y pinch-zoom;
+    }
+
+    /* When Signing Mode is active, disable default page pan/zoom on touch */
+    #viewer-container.signing-active {
       touch-action: none;
     }
+
     .page-wrapper {
       position: relative;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
       background-color: white;
-      transform-origin: 0 0;
+      transform-origin: top center;
     }
     canvas {
       display: block;
     }
     .drawing-canvas {
       position: absolute;
-      top: 0;
-      left: 0;
+      top: 0; left: 0;
       z-index: 5;
-      touch-action: none;
+      pointer-events: none; /* Off during Navigate mode */
     }
+    #viewer-container.signing-active .drawing-canvas {
+      pointer-events: auto; /* Active during Sign mode */
+    }
+
     .status-text {
-      font-size: 12px;
-      font-weight: bold;
-      color: #aaa;
+      font-size: 13px;
+      font-weight: 600;
+      color: #ddd;
     }
+
     #drop-zone {
       position: absolute;
-      top: 50%;
-      left: 50%;
+      top: 50%; left: 50%;
       transform: translate(-50%, -50%);
-      border: 2px dashed #666;
+      border: 2px dashed #555;
       border-radius: 12px;
-      padding: 30px;
+      padding: 24px;
       text-align: center;
-      background: rgba(30, 30, 30, 0.9);
+      background: rgba(30, 30, 30, 0.95);
+      width: 80%;
+      max-width: 320px;
     }
+
+    /* Mobile Bottom Toolbar */
+    footer {
+      height: var(--bottom-bar-height);
+      background-color: var(--panel-bg);
+      border-top: 1px solid #333;
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      padding: 0 8px;
+      z-index: 20;
+    }
+
     /* Modals & Library */
     .modal {
       display: none;
       position: fixed;
       top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.7);
+      background: rgba(0,0,0,0.75);
       z-index: 100;
       justify-content: center;
       align-items: center;
@@ -133,15 +189,16 @@
     .modal-content {
       background: #222;
       padding: 20px;
-      border-radius: 8px;
-      width: 320px;
+      border-radius: 12px;
+      width: 88%;
+      max-width: 340px;
       display: flex;
       flex-direction: column;
       gap: 12px;
     }
     .modal-content input[type="text"] {
-      padding: 8px;
-      border-radius: 4px;
+      padding: 10px;
+      border-radius: 6px;
       border: 1px solid #555;
       background: #111;
       color: #fff;
@@ -165,48 +222,52 @@
 </head>
 <body>
 
+  <!-- Top Mobile Toolbar -->
   <header>
     <div class="btn-group">
-      <button id="open-btn">📁 Open PDF</button>
+      <button id="open-btn">📁 Open</button>
       <input type="file" id="pdf-input" accept="application/pdf,*/*">
-      <button id="save-btn" class="primary" disabled>💾 Save Signed PDF</button>
+      <button id="save-btn" class="primary" disabled>💾 Save</button>
     </div>
 
-    <!-- Zoom Controls -->
-    <div class="btn-group">
-      <button id="zoom-out" disabled>🔍 -</button>
-      <span id="zoom-val" class="status-text">100%</span>
-      <button id="zoom-in" disabled>🔍 +</button>
-      <button id="zoom-reset" disabled>↺</button>
-    </div>
+    <!-- Mode Switcher -->
+    <button id="mode-toggle" disabled>🖐️ Navigate Mode</button>
 
-    <!-- Navigation -->
+    <!-- Undo / Redo Controls -->
     <div class="btn-group">
-      <button id="prev-page" disabled>❮</button>
-      <span class="status-text">Page <span id="page-num">0</span> / <span id="page-count">0</span></span>
-      <button id="next-page" disabled>❯</button>
-    </div>
-
-    <!-- Ink, Auto-Sig & Library Controls -->
-    <div class="btn-group">
-      <input type="color" id="pen-color" class="color-picker" value="#000d66" title="Wet Ink Color">
-      <button id="gen-sig-btn" disabled>✍️ Auto Signature</button>
-      <button id="save-sig-lib" disabled>💾 Save to Library</button>
-      <button id="open-lib-btn">📦 Saved Sigs (<span id="lib-count">0</span>)</button>
-      <button id="clear-canvas" disabled>🧹 Clear</button>
+      <button id="undo-btn" title="Undo" disabled>↩️</button>
+      <button id="redo-btn" title="Redo" disabled>↪️</button>
     </div>
   </header>
 
+  <!-- Canvas Container -->
   <div id="viewer-container">
     <div id="drop-zone">
-      <h3>Tap "Open PDF" to begin</h3>
-      <p>Use 2 fingers to zoom/pan or resize signature. Single finger/S Pen to sign.</p>
+      <h3>Tap "Open" to load a PDF</h3>
+      <p style="font-size: 13px; color: #aaa;">Scroll & pinch to zoom naturally. Switch to <b>Sign Mode</b> when ready to draw.</p>
     </div>
     <div class="page-wrapper" id="page-wrapper" style="display:none;">
       <canvas id="pdf-render"></canvas>
       <canvas id="draw-canvas" class="drawing-canvas"></canvas>
     </div>
   </div>
+
+  <!-- Bottom Navigation & Tools Bar -->
+  <footer>
+    <div class="btn-group">
+      <button id="prev-page" disabled>❮</button>
+      <span class="status-text"><span id="page-num">0</span>/<span id="page-count">0</span></span>
+      <button id="next-page" disabled>❯</button>
+    </div>
+
+    <div class="btn-group">
+      <input type="color" id="pen-color" class="color-picker" value="#000d66" title="Ink Color">
+      <button id="gen-sig-btn" disabled>✍️ Auto</button>
+      <button id="save-sig-lib" disabled>💾 Save Sig</button>
+      <button id="open-lib-btn">📦 Lib (<span id="lib-count">0</span>)</button>
+      <button id="clear-canvas" disabled>🧹</button>
+    </div>
+  </footer>
 
   <!-- Auto Signature Generator Modal -->
   <div class="modal" id="sig-modal">
@@ -215,15 +276,15 @@
       <input type="text" id="name-input" placeholder="Enter full name...">
       <div class="btn-group" style="justify-content: flex-end;">
         <button id="close-modal">Cancel</button>
-        <button id="place-sig-btn" class="primary">Place on Page</button>
+        <button id="place-sig-btn" class="primary">Place Signature</button>
       </div>
     </div>
   </div>
 
   <!-- Saved Signatures Library Modal -->
   <div class="modal" id="lib-modal">
-    <div class="modal-content" style="width: 360px;">
-      <h3>Session Signature Library</h3>
+    <div class="modal-content">
+      <h3>Signature Library</h3>
       <div id="library-container" class="sig-library-grid">
         <p style="color:#aaa; font-size: 13px;">No saved signatures in this session yet.</p>
       </div>
@@ -239,16 +300,18 @@
     let pdfDoc = null;
     let pageNum = 1;
     let baseScale = 2.0;
-    let currentZoom = 1.0;
     let rawPdfBytes = null;
-
-    // Viewport Panning offset
-    let panX = 0, panY = 0;
 
     // Signatures stored per page
     const pageSignatures = {};
     // Session Signature Library
     const signatureLibrary = [];
+
+    // Undo / Redo History Stacks (per page)
+    const undoStacks = {};
+    const redoStacks = {};
+
+    let isSigningMode = false; // Mode Switch: false = Navigate, true = Sign
 
     const pageWrapper = document.getElementById('page-wrapper');
     const pdfCanvas = document.getElementById('pdf-render');
@@ -258,13 +321,15 @@
     const fileInput = document.getElementById('pdf-input');
     const openBtn = document.getElementById('open-btn');
     const viewerContainer = document.getElementById('viewer-container');
+    const modeToggle = document.getElementById('mode-toggle');
+    const undoBtn = document.getElementById('undo-btn');
+    const redoBtn = document.getElementById('redo-btn');
 
     let isDrawing = false;
     let points = [];
     let penColor = document.getElementById('pen-color').value;
 
-    // Active placed signature box state for two-finger resizing
-    let activeSigBox = null; 
+    let activeSigBox = null;
 
     document.getElementById('pen-color').addEventListener('change', (e) => {
       penColor = e.target.value;
@@ -288,20 +353,15 @@
       document.getElementById('clear-canvas').disabled = false;
       document.getElementById('gen-sig-btn').disabled = false;
       document.getElementById('save-sig-lib').disabled = false;
-      document.getElementById('zoom-in').disabled = false;
-      document.getElementById('zoom-out').disabled = false;
-      document.getElementById('zoom-reset').disabled = false;
+      modeToggle.disabled = false;
       
       pageNum = 1;
-      currentZoom = 1.0;
-      panX = 0; panY = 0;
       renderPage(pageNum);
     });
 
     async function renderPage(num) {
       const page = await pdfDoc.getPage(num);
-      const effectiveScale = baseScale * currentZoom;
-      const viewport = page.getViewport({ scale: effectiveScale });
+      const viewport = page.getViewport({ scale: baseScale });
 
       pdfCanvas.height = viewport.height;
       pdfCanvas.width = viewport.width;
@@ -313,14 +373,7 @@
       drawCanvas.style.width = (viewport.width / baseScale) + 'px';
       drawCanvas.style.height = (viewport.height / baseScale) + 'px';
 
-      updateTransform();
-
-      const renderContext = {
-        canvasContext: pdfCtx,
-        viewport: viewport
-      };
-
-      await page.render(renderContext).promise;
+      await page.render({ canvasContext: pdfCtx, viewport: viewport }).promise;
 
       drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
       if (pageSignatures[num]) {
@@ -330,13 +383,83 @@
       }
 
       document.getElementById('page-num').textContent = num;
-      document.getElementById('zoom-val').textContent = Math.round(currentZoom * 100) + '%';
       document.getElementById('prev-page').disabled = num <= 1;
       document.getElementById('next-page').disabled = num >= pdfDoc.numPages;
+
+      // Initialize Undo/Redo state for this page
+      if (!undoStacks[num]) undoStacks[num] = [];
+      if (!redoStacks[num]) redoStacks[num] = [];
+      updateUndoRedoUI();
     }
 
-    function updateTransform() {
-      pageWrapper.style.transform = `translate(${panX}px, ${panY}px)`;
+    // --- MODE TOGGLE LOGIC ---
+    modeToggle.addEventListener('click', () => {
+      isSigningMode = !isSigningMode;
+      if (isSigningMode) {
+        modeToggle.textContent = '✍️ Sign Mode';
+        modeToggle.classList.add('active');
+        viewerContainer.classList.add('signing-active');
+      } else {
+        modeToggle.textContent = '🖐️ Navigate Mode';
+        modeToggle.classList.remove('active');
+        viewerContainer.classList.remove('signing-active');
+      }
+    });
+
+    // --- UNDO / REDO ENGINE ---
+    function saveCanvasState() {
+      if (!undoStacks[pageNum]) undoStacks[pageNum] = [];
+      // Push snapshot before or after stroke
+      undoStacks[pageNum].push(drawCanvas.toDataURL('image/png'));
+      redoStacks[pageNum] = []; // Clear redo stack on new action
+      autoSaveCurrentPage();
+      updateUndoRedoUI();
+    }
+
+    function updateUndoRedoUI() {
+      const uStack = undoStacks[pageNum] || [];
+      const rStack = redoStacks[pageNum] || [];
+      undoBtn.disabled = uStack.length === 0;
+      redoBtn.disabled = rStack.length === 0;
+    }
+
+    undoBtn.addEventListener('click', () => {
+      const uStack = undoStacks[pageNum];
+      if (!uStack || uStack.length === 0) return;
+
+      // Move current state to redo stack
+      if (!redoStacks[pageNum]) redoStacks[pageNum] = [];
+      redoStacks[pageNum].push(drawCanvas.toDataURL('image/png'));
+
+      const prevState = uStack.pop();
+      restoreCanvasFromDataUrl(prevState);
+      updateUndoRedoUI();
+    });
+
+    redoBtn.addEventListener('click', () => {
+      const rStack = redoStacks[pageNum];
+      if (!rStack || rStack.length === 0) return;
+
+      // Save current state back to undo stack
+      undoStacks[pageNum].push(drawCanvas.toDataURL('image/png'));
+
+      const nextState = rStack.pop();
+      restoreCanvasFromDataUrl(nextState);
+      updateUndoRedoUI();
+    });
+
+    function restoreCanvasFromDataUrl(dataUrl) {
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      if (dataUrl) {
+        const img = new Image();
+        img.onload = () => {
+          drawCtx.drawImage(img, 0, 0);
+          autoSaveCurrentPage();
+        };
+        img.src = dataUrl;
+      } else {
+        autoSaveCurrentPage();
+      }
     }
 
     function autoSaveCurrentPage() {
@@ -345,7 +468,7 @@
       }
     }
 
-    // Page Navigation
+    // --- NAVIGATION ---
     document.getElementById('prev-page').addEventListener('click', () => {
       if (pageNum <= 1) return;
       autoSaveCurrentPage();
@@ -360,40 +483,16 @@
       renderPage(pageNum);
     });
 
-    // Zoom Controls
-    document.getElementById('zoom-in').addEventListener('click', () => {
-      if (currentZoom < 3.0) {
-        autoSaveCurrentPage();
-        currentZoom += 0.25;
-        renderPage(pageNum);
-      }
-    });
-
-    document.getElementById('zoom-out').addEventListener('click', () => {
-      if (currentZoom > 0.5) {
-        autoSaveCurrentPage();
-        currentZoom -= 0.25;
-        renderPage(pageNum);
-      }
-    });
-
-    document.getElementById('zoom-reset').addEventListener('click', () => {
-      autoSaveCurrentPage();
-      currentZoom = 1.0;
-      panX = 0; panY = 0;
-      renderPage(pageNum);
-    });
-
     document.getElementById('clear-canvas').addEventListener('click', () => {
+      saveCanvasState();
       drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
       delete pageSignatures[pageNum];
       activeSigBox = null;
     });
 
-    // --- TWO-FINGER ZOOM / PAN & SIGNATURE RESIZING ENGINE ---
+    // --- TWO-FINGER SIGNATURE RESIZING ENGINE ---
     let activeTouches = [];
     let initialTouchDist = 0;
-    let initialZoom = 1.0;
     let initialSigScale = 1.0;
 
     function getDistance(t1, t2) {
@@ -403,50 +502,39 @@
     }
 
     viewerContainer.addEventListener('touchstart', (e) => {
+      if (!isSigningMode) return;
       activeTouches = Array.from(e.touches);
 
-      if (activeTouches.length === 2) {
-        // Two finger gesture initialized
+      if (activeTouches.length === 2 && activeSigBox) {
         isDrawing = false;
         initialTouchDist = getDistance(activeTouches[0], activeTouches[1]);
-        initialZoom = currentZoom;
-
-        if (activeSigBox) {
-          initialSigScale = activeSigBox.scale;
-        }
+        initialSigScale = activeSigBox.scale;
       }
     }, { passive: false });
 
     viewerContainer.addEventListener('touchmove', (e) => {
+      if (!isSigningMode) return;
       activeTouches = Array.from(e.touches);
 
-      if (activeTouches.length === 2) {
-        e.preventDefault(); // Prevent page scrolling
-
+      if (activeTouches.length === 2 && activeSigBox) {
+        e.preventDefault();
         const currentDist = getDistance(activeTouches[0], activeTouches[1]);
         const scaleChange = currentDist / initialTouchDist;
 
-        if (activeSigBox) {
-          // Resize active signature box with two fingers
-          activeSigBox.scale = Math.max(0.2, initialSigScale * scaleChange);
-          redrawActiveSignatureBox();
-        } else {
-          // Pinch Zoom page
-          currentZoom = Math.min(Math.max(0.5, initialZoom * scaleChange), 3.0);
-          renderPage(pageNum);
-        }
+        activeSigBox.scale = Math.max(0.2, initialSigScale * scaleChange);
+        redrawActiveSignatureBox();
       }
     }, { passive: false });
 
     viewerContainer.addEventListener('touchend', (e) => {
+      if (!isSigningMode) return;
       activeTouches = Array.from(e.touches);
       if (activeTouches.length < 2 && activeSigBox) {
-        // Burn resized signature to page canvas when fingers lifted
         commitActiveSignatureBox();
       }
     });
 
-    // --- S PEN / SINGLE TOUCH WET INK ENGINE ---
+    // --- S PEN / TOUCH INK ENGINE ---
     function getPointerPos(e) {
       const rect = drawCanvas.getBoundingClientRect();
       const scaleX = drawCanvas.width / rect.width;
@@ -459,16 +547,16 @@
     }
 
     drawCanvas.addEventListener('pointerdown', (e) => {
-      // Ignore stroke if 2 fingers are active or touch tool is not pen/mouse/single finger
-      if (activeTouches.length >= 2) return;
+      if (!isSigningMode || activeTouches.length >= 2) return;
 
+      saveCanvasState(); // Push state to undo stack before starting new stroke
       isDrawing = true;
       drawCanvas.setPointerCapture(e.pointerId);
       points = [getPointerPos(e)];
     });
 
     drawCanvas.addEventListener('pointermove', (e) => {
-      if (!isDrawing || activeTouches.length >= 2) return;
+      if (!isDrawing || !isSigningMode || activeTouches.length >= 2) return;
       points.push(getPointerPos(e));
 
       if (points.length < 3) return;
@@ -501,8 +589,9 @@
       autoSaveCurrentPage();
     });
 
-    // --- ACTIVE RESIZABLE SIGNATURE BOX SYSTEM ---
+    // --- RESIZABLE SIGNATURE BOX SYSTEM ---
     function placeResizableSignature(dataUrl) {
+      saveCanvasState();
       const img = new Image();
       img.onload = () => {
         activeSigBox = {
@@ -521,7 +610,6 @@
     function redrawActiveSignatureBox() {
       if (!activeSigBox) return;
 
-      // Temporary redraw canvas state
       drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
       if (pageSignatures[pageNum]) {
         const bgImg = new Image();
@@ -534,7 +622,6 @@
 
       drawCtx.drawImage(activeSigBox.img, activeSigBox.x, activeSigBox.y, w, h);
 
-      // Draw bounding box outline for 2-finger resizing visual guidance
       drawCtx.save();
       drawCtx.strokeStyle = '#0d6efd';
       drawCtx.lineWidth = 2 * baseScale;
@@ -549,7 +636,6 @@
       const w = activeSigBox.width * activeSigBox.scale;
       const h = activeSigBox.height * activeSigBox.scale;
 
-      // Draw permanent onto page signature layer
       drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
       if (pageSignatures[pageNum]) {
         const bgImg = new Image();
@@ -568,7 +654,7 @@
       signatureLibrary.push(dataUrl);
       
       document.getElementById('lib-count').textContent = signatureLibrary.length;
-      alert("Signature saved to session library!");
+      alert("Signature saved to library!");
     });
 
     const libModal = document.getElementById('lib-modal');
@@ -624,7 +710,7 @@
       sigModal.style.display = 'none';
     });
 
-    // Export PDF with Signatures
+    // Save Signed PDF
     document.getElementById('save-btn').addEventListener('click', async () => {
       autoSaveCurrentPage();
 
