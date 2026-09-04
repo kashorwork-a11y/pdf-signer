@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PDF Signature Viewer</title>
+  <title>PDF Signature & Editor Toolkit</title>
+  <!-- PDF.js Library for PDF rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <style>
-    /* Reset and page base */
     * {
       box-sizing: border-box;
       margin: 0;
@@ -13,14 +14,14 @@
     }
     body {
       font-family: Arial, sans-serif;
-      background-color: #f0f2f5;
+      background-color: #eef2f5;
       overflow: hidden;
       height: 100vh;
       width: 100vw;
     }
 
     /* -------------------------------------------------------------
-       FIXED TOP AND BOTTOM BUTTON BARS (Stay pinned during page zoom)
+       FIXED TOP & BOTTOM TOOLBARS (Pinned across zoom/pan)
        ------------------------------------------------------------- */
     .ui-overlay {
       position: fixed;
@@ -28,7 +29,7 @@
       left: 0;
       width: 100vw;
       height: 100vh;
-      pointer-events: none; /* Allows mouse clicks to reach the PDF underneath */
+      pointer-events: none;
       z-index: 9999;
     }
 
@@ -37,48 +38,81 @@
       left: 50%;
       transform: translateX(-50%);
       background: #ffffff;
-      padding: 10px 20px;
+      padding: 8px 16px;
       border-radius: 30px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
       display: flex;
-      gap: 12px;
-      pointer-events: auto; /* Makes buttons clickable */
+      align-items: center;
+      gap: 10px;
+      pointer-events: auto;
     }
 
-    .top-bar {
-      top: 20px;
-    }
-
-    .bottom-bar {
-      bottom: 20px;
-    }
+    .top-bar { top: 15px; }
+    .bottom-bar { bottom: 15px; }
 
     .btn {
       background-color: #007bff;
       color: white;
       border: none;
-      padding: 8px 16px;
-      border-radius: 20px;
-      font-size: 14px;
+      padding: 8px 14px;
+      border-radius: 18px;
+      font-size: 13px;
       font-weight: bold;
       cursor: pointer;
-      transition: background-color 0.2s ease;
+      transition: background-color 0.2s;
     }
 
-    .btn:hover {
-      background-color: #0056b3;
-    }
+    .btn:hover { background-color: #0056b3; }
+    .btn-secondary { background-color: #6c757d; }
+    .btn-secondary:hover { background-color: #545b62; }
+    .btn-success { background-color: #28a745; }
+    .btn-success:hover { background-color: #218838; }
 
-    .btn-secondary {
-      background-color: #6c757d;
-    }
+    .file-input { display: none; }
 
-    .btn-secondary:hover {
-      background-color: #545b62;
+    .page-info {
+      font-size: 13px;
+      font-weight: bold;
+      color: #333;
+      padding: 0 8px;
     }
 
     /* -------------------------------------------------------------
-       PDF WORKSPACE & ZOOMABLE CONTAINER
+       SIGNATURE LIBRARY DRAWER
+       ------------------------------------------------------------- */
+    .library-drawer {
+      position: fixed;
+      right: 15px;
+      top: 75px;
+      width: 220px;
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+      padding: 12px;
+      pointer-events: auto;
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+
+    .library-drawer.open { display: flex; }
+
+    .library-item {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 8px;
+      text-align: center;
+      cursor: pointer;
+      background: #f8f9fa;
+      transition: border-color 0.2s;
+    }
+
+    .library-item:hover { border-color: #007bff; }
+
+    /* -------------------------------------------------------------
+       WORKSPACE & CANVAS
        ------------------------------------------------------------- */
     .viewport {
       width: 100vw;
@@ -87,95 +121,159 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      padding: 80px 20px; /* Spacing so content isn't blocked by bars */
+      padding: 80px 20px;
     }
 
-    /* Dummy PDF page representing your document */
     .pdf-page {
       position: relative;
-      width: 600px;
-      height: 800px;
       background: white;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
       transform-origin: center center;
-      transition: transform 0.1s ease-out;
       user-select: none;
     }
 
-    .pdf-watermark {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      color: #e0e0e0;
-      font-size: 32px;
-      font-weight: bold;
-      text-align: center;
-      pointer-events: none;
+    canvas {
+      display: block;
     }
 
     /* -------------------------------------------------------------
-       DRAGGABLE SIGNATURE STYLE
+       SIGNATURE ITEM STYLE
        ------------------------------------------------------------- */
     .pdf-signature {
       position: absolute;
       cursor: grab;
       border: 2px dashed #007bff;
       padding: 6px 12px;
-      background: rgba(255, 255, 255, 0.9);
+      background: rgba(255, 255, 255, 0.92);
       border-radius: 6px;
       font-weight: bold;
-      color: #333;
+      color: #222;
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
       z-index: 10;
     }
 
-    .pdf-signature:active {
-      cursor: grabbing;
+    .pdf-signature:active { cursor: grabbing; }
+
+    .placeholder-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #888;
+      font-size: 18px;
     }
   </style>
 </head>
 <body>
 
-  <!-- FIXED UI OVERLAY: Buttons stay on screen regardless of zoom level -->
+  <!-- FIXED OVERLAY UI -->
   <div class="ui-overlay">
+    
+    <!-- TOP TOOLBAR -->
     <div class="top-bar">
-      <button class="btn" onclick="addLibrarySignature()">+ Add Signature from Library</button>
+      <!-- Add PDF File -->
+      <button class="btn btn-success" onclick="document.getElementById('pdfInput').click()">+ Add PDF</button>
+      <input type="file" id="pdfInput" class="file-input" accept="application/pdf" onchange="loadPdfFile(event)">
+
+      <!-- Signature Actions -->
+      <button class="btn" onclick="addTextSignature()">+ Create Signature</button>
+      <button class="btn btn-secondary" onclick="toggleLibrary()">Signature Library</button>
+      
+      <!-- Mode Toggle -->
       <button class="btn btn-secondary" id="modeBtn" onclick="toggleMode()">Mode: Navigation</button>
     </div>
 
+    <!-- SIGNATURE LIBRARY DRAWER -->
+    <div class="library-drawer" id="libraryDrawer">
+      <strong>Saved Signatures</strong>
+      <div class="library-item" onclick="insertFromLibrary('John Doe')">John Doe</div>
+      <div class="library-item" onclick="insertFromLibrary('Approved')">Approved Stamp</div>
+      <div class="library-item" onclick="insertFromLibrary('Verified ✓')">Verified ✓</div>
+    </div>
+
+    <!-- BOTTOM NAVIGATION & ZOOM TOOLBAR -->
     <div class="bottom-bar">
+      <button class="btn btn-secondary" onclick="changePage(-1)">Prev</button>
+      <span class="page-info" id="pageInfo">Page 0 / 0</span>
+      <button class="btn btn-secondary" onclick="changePage(1)">Next</button>
+      
+      <span style="border-left: 1px solid #ccc; height: 20px; margin: 0 4px;"></span>
+
       <button class="btn" onclick="adjustZoom(0.1)">Zoom In (+)</button>
       <button class="btn" onclick="adjustZoom(-0.1)">Zoom Out (-)</button>
       <button class="btn btn-secondary" onclick="resetZoom()">Reset Zoom</button>
     </div>
+
   </div>
 
-  <!-- MAIN SCROLLABLE AREA -->
+  <!-- PDF VIEWPORT -->
   <div class="viewport">
-    <!-- PDF PAGE CONTAINER -->
     <div class="pdf-page" id="pdfPage">
-      <div class="pdf-watermark">PDF DOCUMENT PAGE</div>
-      
-      <!-- Existing sample signature -->
-      <div class="pdf-signature" style="left: 50px; top: 50px;">
-        Sample Signature
-      </div>
+      <div class="placeholder-text" id="placeholder">Click "+ Add PDF" to upload a document</div>
+      <canvas id="pdfCanvas"></canvas>
     </div>
   </div>
 
   <script>
-    // System variables
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+    let pdfDoc = null;
+    let pageNum = 1;
     let currentScale = 1.0;
     let isNavMode = true;
     let activeSignature = null;
     let dragOffset = { x: 0, y: 0 };
 
     const pdfPage = document.getElementById('pdfPage');
+    const canvas = document.getElementById('pdfCanvas');
+    const ctx = canvas.getContext('2d');
 
-    // -----------------------------------------------------------------
-    // 1. ZOOM SYSTEM (Keeps top and bottom bars untouched)
-    // -----------------------------------------------------------------
+    // --- 1. PDF FILE LOADING & PAGE RENDERING ---
+    function loadPdfFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const fileReader = new FileReader();
+      fileReader.onload = function () {
+        const typedarray = new Uint8Array(this.result);
+        pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+          pdfDoc = pdf;
+          pageNum = 1;
+          document.getElementById('placeholder').style.display = 'none';
+          renderPage(pageNum);
+        });
+      };
+      fileReader.readAsArrayBuffer(file);
+    }
+
+    function renderPage(num) {
+      pdfDoc.getPage(num).then(page => {
+        const viewport = page.getViewport({ scale: 1.5 });
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        pdfPage.style.width = viewport.width + 'px';
+        pdfPage.style.height = viewport.height + 'px';
+
+        const renderContext = {
+          canvasContext: ctx,
+          viewport: viewport
+        };
+        page.render(renderContext);
+
+        document.getElementById('pageInfo').textContent = `Page ${num} / ${pdfDoc.numPages}`;
+      });
+    }
+
+    function changePage(delta) {
+      if (!pdfDoc) return;
+      if (pageNum + delta >= 1 && pageNum + delta <= pdfDoc.numPages) {
+        pageNum += delta;
+        renderPage(pageNum);
+      }
+    }
+
+    // --- 2. ZOOM SYSTEM ---
     function adjustZoom(amount) {
       currentScale = Math.max(0.5, Math.min(2.5, currentScale + amount));
       pdfPage.style.transform = `scale(${currentScale})`;
@@ -188,13 +286,15 @@
 
     function toggleMode() {
       isNavMode = !isNavMode;
-      const modeBtn = document.getElementById('modeBtn');
-      modeBtn.textContent = isNavMode ? 'Mode: Navigation' : 'Mode: Edit';
+      document.getElementById('modeBtn').textContent = isNavMode ? 'Mode: Navigation' : 'Mode: Edit';
     }
 
-    // -----------------------------------------------------------------
-    // 2. DRAG AND DROP SIGNATURES (Works everywhere & for library items)
-    // -----------------------------------------------------------------
+    function toggleLibrary() {
+      const drawer = document.getElementById('libraryDrawer');
+      drawer.classList.toggle('open');
+    }
+
+    // --- 3. DRAG AND DROP SIGNATURE SYSTEM ---
     function makeDraggable(element) {
       element.addEventListener('mousedown', startDrag);
       element.addEventListener('touchstart', startDrag, { passive: false });
@@ -225,7 +325,6 @@
 
       const pdfRect = pdfPage.getBoundingClientRect();
 
-      // Account for page zoom scaling during position calculation
       let newX = (clientX - pdfRect.left) / currentScale - dragOffset.x;
       let newY = (clientY - pdfRect.top) / currentScale - dragOffset.y;
 
@@ -241,23 +340,29 @@
       document.removeEventListener('touchend', stopDrag);
     }
 
-    // -----------------------------------------------------------------
-    // 3. ADD SIGNATURE FROM LIBRARY
-    // -----------------------------------------------------------------
-    function addLibrarySignature() {
-      const newSig = document.createElement('div');
-      newSig.className = 'pdf-signature';
-      newSig.textContent = 'Library Signature #' + (pdfPage.children.length);
-      newSig.style.left = '100px';
-      newSig.style.top = '100px';
-
-      // Make the new library signature immediately draggable
-      makeDraggable(newSig);
-      pdfPage.appendChild(newSig);
+    // --- 4. SIGNATURE CREATION & LIBRARY INSERTION ---
+    function addTextSignature() {
+      const text = prompt("Enter signature text:", "New Signature");
+      if (text) {
+        insertSignatureElement(text);
+      }
     }
 
-    // Enable drag capability on page startup for default elements
-    document.querySelectorAll('.pdf-signature').forEach(makeDraggable);
+    function insertFromLibrary(text) {
+      insertSignatureElement(text);
+      toggleLibrary();
+    }
+
+    function insertSignatureElement(text) {
+      const sig = document.createElement('div');
+      sig.className = 'pdf-signature';
+      sig.textContent = text;
+      sig.style.left = '50px';
+      sig.style.top = '50px';
+
+      makeDraggable(sig);
+      pdfPage.appendChild(sig);
+    }
   </script>
 </body>
 </html>
