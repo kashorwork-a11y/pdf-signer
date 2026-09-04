@@ -11,6 +11,9 @@ function PdfSigner() {
   // Modes: 'navigate' or 'sign'
   const [mode, setMode] = useState('navigate');
 
+  // Signature Color State (Default wet-ink blue #002B7F)
+  const [penColor, setPenColor] = useState('#002B7F');
+
   // Signatures saved across all pages: Array of { id, page, x, y, width, height, dataUrl }
   const [signatures, setSignatures] = useState([]);
   const [selectedSigId, setSelectedSigId] = useState(null);
@@ -25,13 +28,10 @@ function PdfSigner() {
   const [history, setHistory] = useState([[]]);
   const [historyStep, setHistoryStep] = useState(0);
 
-  // Dragging and Resizing
-  const [isDragging, setIsDragging] = useState(false);
-  const [isResizing, setIsResizing] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0, startW: 0, startH: 0, sigX: 0, sigY: 0 });
+  // Dragging and Resizing Refs (using refs avoids closure bugs during mouse drag)
+  const activeActionRef = useRef(null); // { type: 'move'|'resize', id, startX, startY, sigX, sigY, startW, startH }
 
   const pdfCanvasRef = useRef(null);
-  const containerRef = useRef(null);
 
   // Helper to push history
   const updateSignatures = (newSigs) => {
@@ -98,9 +98,9 @@ function PdfSigner() {
     }
   }, [pdfDoc, currentPage, zoom]);
 
-  // Handle clicking on page
+  // Handle clicking on page to add signature
   const handlePageClick = (e) => {
-    if (mode !== 'sign' || isDragging || isResizing) return;
+    if (mode !== 'sign' || activeActionRef.current) return;
     const rect = pdfCanvasRef.current.getBoundingClientRect();
     const x = (e.clientX - rect.left) / zoom;
     const y = (e.clientY - rect.top) / zoom;
@@ -119,14 +119,15 @@ function PdfSigner() {
       ctx.lineWidth = 3;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.strokeStyle = '#0F172A';
+      ctx.strokeStyle = penColor;
     }
-  }, [isModalOpen]);
+  }, [isModalOpen, penColor]);
 
   const startDrawing = (e) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = penColor;
     const rect = canvas.getBoundingClientRect();
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
@@ -178,62 +179,54 @@ function PdfSigner() {
     setIsModalOpen(false);
   };
 
-  // Drag & Resize Handlers
+  // Drag & Resize mouse handlers
   const handleMouseDown = (e, sig, type) => {
     e.stopPropagation();
     setSelectedSigId(sig.id);
-    if (type === 'move') {
-      setIsDragging(true);
-      setDragStart({
-        x: e.clientX,
-        y: e.clientY,
-        sigX: sig.x,
-        sigY: sig.y,
-      });
-    } else if (type === 'resize') {
-      setIsResizing(true);
-      setDragStart({
-        x: e.clientX,
-        y: e.clientY,
-        startW: sig.width,
-        startH: sig.height,
-      });
-    }
+
+    activeActionRef.current = {
+      type,
+      id: sig.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      sigX: sig.x,
+      sigY: sig.y,
+      startW: sig.width,
+      startH: sig.height,
+    };
   };
 
   const handleMouseMove = (e) => {
-    if (!selectedSigId) return;
+    if (!activeActionRef.current) return;
+    const action = activeActionRef.current;
 
-    if (isDragging) {
-      const dx = (e.clientX - dragStart.x) / zoom;
-      const dy = (e.clientY - dragStart.y) / zoom;
+    if (action.type === 'move') {
+      const dx = (e.clientX - action.startX) / zoom;
+      const dy = (e.clientY - action.startY) / zoom;
 
-      const updated = signatures.map((s) =>
-        s.id === selectedSigId ? { ...s, x: dragStart.sigX + dx, y: dragStart.sigY + dy } : s
+      setSignatures((prev) =>
+        prev.map((s) => (s.id === action.id ? { ...s, x: action.sigX + dx, y: action.sigY + dy } : s))
       );
-      setSignatures(updated);
-    } else if (isResizing) {
-      const dx = (e.clientX - dragStart.x) / zoom;
-      const aspectRatio = dragStart.startW / dragStart.startH;
-      const newW = Math.max(40, dragStart.startW + dx);
+    } else if (action.type === 'resize') {
+      const dx = (e.clientX - action.startX) / zoom;
+      const aspectRatio = action.startW / action.startH;
+      const newW = Math.max(40, action.startW + dx);
       const newH = newW / aspectRatio;
 
-      const updated = signatures.map((s) =>
-        s.id === selectedSigId ? { ...s, width: newW, height: newH } : s
+      setSignatures((prev) =>
+        prev.map((s) => (s.id === action.id ? { ...s, width: newW, height: newH } : s))
       );
-      setSignatures(updated);
     }
   };
 
   const handleMouseUp = () => {
-    if (isDragging || isResizing) {
-      setIsDragging(false);
-      setIsResizing(false);
+    if (activeActionRef.current) {
+      activeActionRef.current = null;
       updateSignatures(signatures);
     }
   };
 
-  // Export Final PDF with all signatures on all pages
+  // Export Final PDF
   const exportPDF = async () => {
     if (!pdfFile) return;
 
@@ -244,10 +237,8 @@ function PdfSigner() {
     for (const sig of signatures) {
       const targetPage = pages[sig.page - 1];
       const pngImage = await loadedPdf.embedPng(sig.dataUrl);
-
       const pageHeight = targetPage.getHeight();
 
-      // Convert top-left coordinates to PDF coordinate system (bottom-left origin)
       const pdfX = sig.x;
       const pdfY = pageHeight - sig.y - sig.height;
 
@@ -267,6 +258,13 @@ function PdfSigner() {
     link.click();
   };
 
+  const colorOptions = [
+    { label: 'Wet Ink Blue', value: '#002B7F' },
+    { label: 'Black', value: '#000000' },
+    { label: 'Dark Navy', value: '#0F172A' },
+    { label: 'Red', value: '#DC2626' },
+  ];
+
   return (
     <div style={styles.appContainer} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
       {/* Top Controls Toolbar */}
@@ -284,13 +282,13 @@ function PdfSigner() {
                 style={{ ...styles.btn, backgroundColor: mode === 'navigate' ? '#2563EB' : '#E2E8F0', color: mode === 'navigate' ? '#FFF' : '#334155' }}
                 onClick={() => setMode('navigate')}
               >
-                🖐️ Navigate Mode
+                🖐️ Navigate
               </button>
               <button
                 style={{ ...styles.btn, backgroundColor: mode === 'sign' ? '#2563EB' : '#E2E8F0', color: mode === 'sign' ? '#FFF' : '#334155' }}
                 onClick={() => setMode('sign')}
               >
-                ✍️ Sign Mode
+                ✍️ Sign
               </button>
             </div>
 
@@ -322,7 +320,7 @@ function PdfSigner() {
 
             {/* Export Button */}
             <button style={{ ...styles.btn, backgroundColor: '#059669', color: '#FFF' }} onClick={exportPDF}>
-              ⬇ Export Signed PDF
+              ⬇ Export PDF
             </button>
           </>
         )}
@@ -335,7 +333,7 @@ function PdfSigner() {
           <p>Click "Upload PDF" above to choose a document from your device.</p>
         </div>
       ) : (
-        <div style={styles.pdfViewerContainer} ref={containerRef}>
+        <div style={styles.pdfViewerContainer}>
           <div
             style={{
               position: 'relative',
@@ -382,6 +380,25 @@ function PdfSigner() {
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
             <h3>Draw Your Signature</h3>
+
+            {/* Color Selector */}
+            <div style={styles.colorPickerContainer}>
+              <span style={{ fontSize: '14px', fontWeight: 600, color: '#475569' }}>Ink Color:</span>
+              {colorOptions.map((c) => (
+                <button
+                  key={c.value}
+                  onClick={() => setPenColor(c.value)}
+                  style={{
+                    ...styles.colorCircle,
+                    backgroundColor: c.value,
+                    outline: penColor === c.value ? '2px solid #2563EB' : 'none',
+                    outlineOffset: '2px',
+                  }}
+                  title={c.label}
+                />
+              ))}
+            </div>
+
             <canvas
               ref={canvasRef}
               style={styles.drawCanvas}
@@ -405,17 +422,19 @@ function PdfSigner() {
 }
 
 const styles = {
-  appContainer: { display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: 'sans-serif', backgroundColor: '#F8FAFC' },
-  toolbar: { display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', padding: '12px 20px', backgroundColor: '#FFFFFF', borderBottom: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' },
+  appContainer: { display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: 'sans-serif', backgroundColor: '#F8FAFC', userSelect: 'none' },
+  toolbar: { display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', padding: '10px 16px', backgroundColor: '#FFFFFF', borderBottom: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' },
   fileLabel: { padding: '8px 14px', backgroundColor: '#2563EB', color: '#FFF', borderRadius: '6px', fontWeight: 600, cursor: 'pointer' },
-  group: { display: 'flex', alignItems: 'center', gap: '6px', paddingRight: '12px', borderRight: '1px solid #E2E8F0' },
+  group: { display: 'flex', alignItems: 'center', gap: '6px', paddingRight: '10px', borderRight: '1px solid #E2E8F0' },
   btn: { padding: '6px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#E2E8F0', color: '#334155', fontWeight: 600, cursor: 'pointer' },
-  pageIndicator: { fontSize: '14px', fontWeight: 600, color: '#475569', minWidth: '80px', textAlign: 'center' },
+  pageIndicator: { fontSize: '14px', fontWeight: 600, color: '#475569', minWidth: '70px', textAlign: 'center' },
   emptyState: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#64748B' },
   pdfViewerContainer: { flex: 1, overflow: 'auto', display: 'flex', justifyContent: 'center', padding: '20px', backgroundColor: '#CBD5E1' },
-  resizeHandle: { position: 'absolute', right: '-6px', bottom: '-6px', width: '12px', height: '12px', backgroundColor: '#2563EB', borderRadius: '2px', cursor: 'nwse-resize' },
+  resizeHandle: { position: 'absolute', right: '-8px', bottom: '-8px', width: '16px', height: '16px', backgroundColor: '#2563EB', border: '2px solid #FFF', borderRadius: '3px', cursor: 'nwse-resize', zIndex: 10 },
   modalOverlay: { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 999 },
   modalContent: { backgroundColor: '#FFF', padding: '24px', borderRadius: '12px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' },
+  colorPickerContainer: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' },
+  colorCircle: { width: '22px', height: '22px', borderRadius: '50%', border: 'none', cursor: 'pointer' },
   drawCanvas: { border: '1px solid #CBD5E1', borderRadius: '8px', cursor: 'crosshair', backgroundColor: '#FAFAFA', touchAction: 'none' },
   modalActions: { display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' },
 };
